@@ -1,0 +1,37 @@
+# ---------- Core Runtime ----------
+fastapi                   # Web framework
+uvicorn[standard]         # ASGI server w/ hot reload, websockets
+
+# Env / settings
+pydantic-settings         # Includes pydantic + pydantic-core
+python-dotenv             # Load .env files for local dev
+
+# Background jobs / queue
+celery[redis]             # Celery with Redis transport
+redis                     # Redis client
+
+# HTTP + Microsoft Graph OAuth2
+httpx                     # Async HTTP client
+msal                      # Microsoft Authentication Library (OAuth2)
+
+# AWS S3
+boto3                     # S3 uploads / downloads
+
+# ---------- Optional, enable if needed ----------
+# pdfplumber              # PDF text extraction
+# pytesseract             # OCR engine (requires Tesseract installed)
+# Pillow                  # Imaging library for pytesseract
+
+# Postgres example
+# sqlalchemy              # ORM
+# asyncpg                 # Async Postgres driver
+
+# MongoDB example
+# motor                   # Async MongoDB driver (pymongo async wrapper)
+
+# ---------- Dev / Tooling ----------
+# pytest                  # Unit testing
+# pytest-asyncio          # Async test helpers
+# black                   # Code formatter
+# ruff                    # Linter + import sorter
+# isort                   # Alternative import sorter
