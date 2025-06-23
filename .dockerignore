@@ -8,3 +8,5 @@ __pycache__/
 .venv/
 .git/
 tests/
+outlook-email-looker/node_modules
+outlook-email-looker/dist
