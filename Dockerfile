@@ -1,13 +1,3 @@
-########################  addin-build  ########################
-FROM node:20-alpine AS addin-build
-
-WORKDIR /workspace/outlook-email-looker
-COPY outlook-email-looker/package*.json ./
-RUN npm ci
-COPY outlook-email-looker/ .
-RUN npm run build
-RUN npm prune --production
-
 ########################  python-runtime  ########################
 FROM python:3.12-slim AS api-runtime
 
@@ -32,9 +22,6 @@ RUN uv pip install --system --no-cache-dir -r requirements.txt
 # application code 
 COPY ./app ./app
 RUN uv pip install --system --no-cache-dir .
-
-# copy compiled add-in assets
-COPY --from=addin-build /workspace/outlook-email-looker/dist ./static/addin/
 
 # drop privileges
 RUN adduser --disabled-password --gecos "" app
