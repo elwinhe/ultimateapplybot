@@ -7,7 +7,18 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic-settings",
+    "python-dotenv",       
+    "celery[redis]",
+    "redis",
+    "httpx",
+    "boto3",
+    "msal",
+    "requests"
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

@@ -1,3 +1,8 @@
+# app/main.py
+# • Builds app instance  
+# • Mounts `/addin` static files  
+# • Registers health-check & `api/v1` routers
+
 from __future__ import annotations
 
 import logging
@@ -26,12 +31,6 @@ def create_app() -> FastAPI:
             "message": f"Task queued for email: {email_id}"
         })
 
-    # serve add-in assets
-    app.mount(
-        "/addin",
-        StaticFiles(directory="static/addin", html=True),
-        name="addin",
-    )
 
     return app
 

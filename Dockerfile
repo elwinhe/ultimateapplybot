@@ -16,8 +16,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 WORKDIR /app
 
 # dependency manifests
-COPY requirements.txt pyproject.toml ./
-RUN uv pip install --system --no-cache-dir -r requirements.txt
+COPY pyproject.toml ./
+RUN uv pip install --system --no-cache-dir .
 
 # application code 
 COPY ./app ./app
