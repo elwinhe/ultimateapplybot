@@ -19,7 +19,8 @@ dependencies = [
     "msal",
     "requests",
     "python-dateutil",
-    "email-validator"
+    "email-validator",
+    "asyncpg"
 ]
 
 [project.optional-dependencies]

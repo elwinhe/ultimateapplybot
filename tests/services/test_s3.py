@@ -14,7 +14,7 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 # Import the client and its exceptions for testing
-from app.clients.s3 import S3Client, S3UploadError, S3ValidationError
+from app.services.s3 import S3Client, S3UploadError, S3ValidationError
 from app.config import settings
 
 

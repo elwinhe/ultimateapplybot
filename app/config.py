@@ -15,5 +15,15 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str
     AWS_REGION: str
 
+    POSTGRES_HOST: str = "postgres"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "emailreader"
+    POSTGRES_USER: str = "emailreader_user"
+    POSTGRES_PASSWORD: str = "emailreader_password"
+
+    def get_database_url(self) -> str:
+        """Construct the database URL from individual components."""
+        return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
 # Create a single, importable instance
 settings = Settings()
