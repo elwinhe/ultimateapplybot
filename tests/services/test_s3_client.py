@@ -1,5 +1,5 @@
 """
-tests/clients/test_s3.py
+tests/clients/test_s3_client.py
 
 Unit tests for the S3Client service.
 
@@ -12,9 +12,10 @@ import boto3
 import pytest
 from botocore.exceptions import ClientError
 from moto import mock_aws
+from datetime import datetime, timezone
 
 # Import the client and its exceptions for testing
-from app.services.s3 import S3Client, S3UploadError, S3ValidationError
+from app.services.s3_client import S3Client, S3UploadError, S3ValidationError
 from app.config import settings
 
 
@@ -116,3 +117,6 @@ def test_upload_eml_file_raises_upload_error_on_client_error(mocker):
     # 2. Assert that our custom S3UploadError is raised
     with pytest.raises(S3UploadError, match="AccessDenied"):
         s3_client.upload_eml_file(filename="test.eml", content=b"test")
+
+
+now = datetime.now(timezone.utc)

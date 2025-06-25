@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "emailreader_user"
     POSTGRES_PASSWORD: str = "emailreader_password"
 
+    # Email processing settings
+    TARGET_MAILBOX: str = "inbox"
+
     def get_database_url(self) -> str:
         """Construct the database URL from individual components."""
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"

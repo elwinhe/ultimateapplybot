@@ -19,6 +19,10 @@ celery.conf.update(
     broker_url=settings.REDIS_URL,
     result_backend=settings.REDIS_URL,
     timezone='UTC',
+    enable_utc=True,
+    task_serializer='json',
+    result_serializer='json',
+    accept_content=['json'],
 
     # Task Routing and Queues
     task_queues=(Queue("default"),),
@@ -27,7 +31,10 @@ celery.conf.update(
     # Worker Reliability and Performance Tuning
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    broker_transport_options={'visibility_timeout': 3600}, # 1 hour
+    task_track_started=True,
+    worker_max_tasks_per_child=100,
+    worker_max_memory_per_child=1_000_000,   # ~1 GB
+    # worker_concurrency left unset → defaults to CPU-count
 
     # Periodic Task Schedule (Celery Beat
     beat_schedule={
