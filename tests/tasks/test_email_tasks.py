@@ -20,8 +20,7 @@ from app.services.graph_client import GraphClientError
 from app.models.email import Email, EmailAddress, Body
 
 
-# --- Fixtures for Mock Data ---
-
+# Fixtures for Mock Data
 @pytest.fixture
 def mock_email_with_invoice() -> Email:
     """Returns a mock Email object with 'invoice' in the subject."""
@@ -85,7 +84,9 @@ def test_should_process_email_rejects_non_matching(mock_email_no_match):
 @pytest.fixture
 def mock_dependencies(mocker):
     """A central fixture to mock all external service dependencies for the Celery task."""
-    # Mock singleton clients imported into the tasks module
+    mocker.patch('app.tasks.email_tasks.settings.TARGET_MAILBOX', 'test-user@example.com')
+    mocker.patch('app.tasks.email_tasks.settings.REDIS_LAST_SEEN_EXPIRY', 604800) # 7 days
+
     mock_redis = mocker.patch('app.tasks.email_tasks.redis_client')
     mock_s3 = mocker.patch('app.tasks.email_tasks.s3_client', new_callable=AsyncMock)
     mock_postgres = mocker.patch('app.tasks.email_tasks.postgres_client', new_callable=AsyncMock)
@@ -123,14 +124,15 @@ async def test_pull_and_process_emails_happy_path(mock_dependencies, mock_email_
     
     # Verify that only the matching email was processed
     mock_dependencies["graph"].fetch_eml_content.assert_awaited_once_with(
-        message_id="invoice_email_123", mailbox="inbox"
+        message_id="invoice_email_123", mailbox="test-user@example.com"
     )
     mock_dependencies["s3"].upload_eml_file.assert_awaited_once()
     mock_dependencies["postgres"].execute.assert_awaited_once()
 
-    # Verify that the new high-water mark was set in Redis
-    mock_dependencies["redis"].set.assert_called_once_with(
+    # Verify that the new high-water mark was set in Redis with an expiry
+    mock_dependencies["redis"].setex.assert_called_once_with(
         "email_processor:last_seen_timestamp",
+        604800, # The expiry from mocked settings
         mock_email_with_invoice.received_date_time.isoformat()
     )
 
@@ -146,7 +148,7 @@ async def test_pull_and_process_emails_no_new_emails(mock_dependencies):
     mock_dependencies["graph"].fetch_eml_content.assert_not_awaited()
     mock_dependencies["s3"].upload_eml_file.assert_not_awaited()
     mock_dependencies["postgres"].execute.assert_not_awaited()
-    mock_dependencies["redis"].set.assert_not_called()
+    mock_dependencies["redis"].setex.assert_not_called() # Check setex specifically
 
 
 @pytest.mark.asyncio
@@ -162,4 +164,4 @@ async def test_pull_and_process_emails_handles_service_error_gracefully(mock_dep
     mock_dependencies["s3"].upload_eml_file.assert_not_awaited()
     mock_dependencies["postgres"].execute.assert_not_awaited()
     # The high-water mark should not be updated on failure
-    mock_dependencies["redis"].set.assert_not_called()
+    mock_dependencies["redis"].setex.assert_not_called()

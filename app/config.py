@@ -15,15 +15,14 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str
     AWS_REGION: str
 
-    POSTGRES_HOST: str = "postgres"
+    POSTGRES_HOST: str
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "emailreader"
-    POSTGRES_USER: str = "emailreader_user"
-    POSTGRES_PASSWORD: str = "emailreader_password"
+    POSTGRES_DB: str
+    POSTGRES_USER: str
+    POSTGRES_PASSWORD: str
 
     # Email processing settings
     TARGET_MAILBOX: str = "inbox"
-
     REDIS_LAST_SEEN_EXPIRY: int = 604800  # 7 days in seconds
 
     def get_database_url(self) -> str:

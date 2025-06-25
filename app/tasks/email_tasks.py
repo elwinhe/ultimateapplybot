@@ -82,7 +82,6 @@ async def pull_and_process_emails() -> None:
         async with httpx.AsyncClient(timeout=60.0) as http_client:
             # 2. Instantiate service clients
             graph_client = GraphClient(http_client=http_client)
-            # The s3_client and postgres_client are imported singletons.
 
             # 3. Fetch ONLY new email messages using the timestamp
             new_emails: List[Email] = await graph_client.fetch_messages(
@@ -124,7 +123,6 @@ async def pull_and_process_emails() -> None:
             logger.info("Finished processing. Archived %d out of %d emails.", processed_count, len(new_emails))
 
             # 8. Update the high-water mark in Redis
-            # The newest email is the first one due to the sorting in fetch_messages
             newest_email_timestamp = new_emails[0].received_date_time
             redis_client.setex(
                 REDIS_LAST_SEEN_KEY, 
