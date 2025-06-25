@@ -190,13 +190,23 @@ class PostgresClient:
         );
         """
         
+        create_archived_emails_table = """
+        CREATE TABLE IF NOT EXISTS archived_emails (
+            message_id VARCHAR(255) PRIMARY KEY,
+            subject TEXT,
+            s3_key VARCHAR(1024),
+            archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+        """
+        
         try:
             await self.execute(create_emails_table)
             await self.execute(create_attachments_table)
+            await self.execute(create_archived_emails_table)
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error("Failed to create tables: %s", str(e), exc_info=True)
-            raise PostgresConnectionError("Failed to create database tables") from e
+            raise PostgresClientError("Failed to create database tables") from e
 
 
 # Singleton instance

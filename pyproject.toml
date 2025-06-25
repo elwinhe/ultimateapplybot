@@ -11,9 +11,7 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "pydantic-settings",
-    "python-dotenv",       
     "celery[redis]",
-    "redis",
     "httpx",
     "boto3",
     "msal",
@@ -26,10 +24,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "pytest-asyncio",
-    "pytest-mock",
-    "moto>=5.1.6"
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+    "moto[s3]>=4.0.0",
+    "testcontainers[postgres]>=3.7.0",
 ]
 
 [build-system]

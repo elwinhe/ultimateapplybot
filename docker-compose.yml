@@ -8,14 +8,14 @@ services:
     container_name: emailreader_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: emailreader
-      POSTGRES_USER: emailreader_user
-      POSTGRES_PASSWORD: emailreader_password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports: ["5432:5432"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U emailreader_user -d emailreader"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -92,6 +92,18 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: test-runtime
+    container_name: emailreader_test_runner
+    env_file: .env
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   postgres_data:
