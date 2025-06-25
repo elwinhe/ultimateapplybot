@@ -9,7 +9,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from app.workers.celery_worker import fetch_demo
+from app.tasks.email_tasks import pull_new_emails
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,12 +23,12 @@ def create_app() -> FastAPI:
 
     # test celery task
     @app.post("/test-celery")
-    async def test_celery(email_id: str = "test-123") -> JSONResponse:
-        result = fetch_demo.delay(email_id)
+    async def test_celery() -> JSONResponse:
+        result = pull_new_emails.delay()
         return JSONResponse({
             "task_id": result.id,
             "status": "queued",
-            "message": f"Task queued for email: {email_id}"
+            "message": "Email pull task queued"
         })
 
 

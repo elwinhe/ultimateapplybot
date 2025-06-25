@@ -1,7 +1,6 @@
 version: "3.8"
 
-x-common-env: &common-env
-  REDIS_URL: redis://redis:6379/0
+x-common-env: &common-env {}
 
 services:
   redis:
@@ -17,11 +16,25 @@ services:
       timeout: 3s
       retries: 5
 
+  beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emailreader_beat
+    restart: unless-stopped
+    command: >
+      celery -A app.celery_app.celery beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    env_file: .env
+    volumes:
+      - ./app:/app/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
   api:
     build:
       context: .
       dockerfile: Dockerfile
-      # target: api-runtime      # uncomment if you named the final stage
     container_name: emailreader_api
     restart: unless-stopped
     env_file: .env
@@ -30,6 +43,7 @@ services:
     ports: ["8000:8000"]
     volumes:
       - ./app:/app/app         # dev-only hot-reload
+      - ./tests:/app/tests     # mount tests directory
     depends_on:
       redis:
         condition: service_healthy
@@ -43,12 +57,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # target: api-runtime
     container_name: emailreader_worker
     restart: unless-stopped
     command: >
-      celery -A app.tasks.email_tasks worker
-      --loglevel=info
+      celery -A app.celery_app.celery worker --loglevel=info
     env_file: .env
     environment:
       <<: *common-env
@@ -56,8 +68,6 @@ services:
       - ./app:/app/app
     depends_on:
       redis:
-        condition: service_healthy
-      api:
         condition: service_healthy
 
 volumes:

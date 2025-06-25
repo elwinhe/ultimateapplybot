@@ -11,12 +11,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-# --- Nested Helper Models ---
-# These models represent the nested JSON objects returned by the Graph API.
-# This approach is more robust and explicit than direct field mapping.
-
+# Nested Helper Models
 class EmailAddress(BaseModel):
     """Represents the 'emailAddress' object within a 'from', 'to', etc. field."""
     name: Optional[str] = None
@@ -36,7 +33,6 @@ class EmailAttachment(BaseModel):
 
 
 # Primary Email Model
-
 class Email(BaseModel):
     """
     Represents a single email message, adapted from the Microsoft Graph API response.
@@ -46,24 +42,18 @@ class Email(BaseModel):
     subject: str
     received_date_time: datetime = Field(..., alias="receivedDateTime")
 
-    # Refined Body and Address Fields
-    body: Body # Use the nested Body model for robustness
+    body: Body
     from_address: EmailAddress = Field(..., alias="from")
-    to_addresses: List[EmailAddress] = Field(..., alias="toRecipients")
+    to_addresses: List[EmailAddress] = Field(..., alias="toRecipients", min_length=1)
     cc_addresses: List[EmailAddress] = Field(default=[], alias="ccRecipients")
     bcc_addresses: List[EmailAddress] = Field(default=[], alias="bccRecipients")
 
-    # Attachment Fields
     has_attachments: bool = Field(..., alias="hasAttachments")
     attachments: Optional[List[EmailAttachment]] = None
 
-    # Pydantic v2 Configuration
     model_config = {
-        # Allows populating fields by either their name or alias.
         "populate_by_name": True,
-        # Enforces immutability after creation, compliant with pure-first design.
         "frozen": True,
-        # Provides an example for auto-generated documentation.
         "json_schema_extra": {
             "examples": [
                 {
@@ -93,3 +83,21 @@ class Email(BaseModel):
             ]
         }
     }
+
+    @model_validator(mode="before")
+    @classmethod
+    def flatten_graph_api_addresses(cls, values):
+        # Helper to extract EmailAddress from Graph API style dict
+        def extract_email_address(obj):
+            if isinstance(obj, dict) and "emailAddress" in obj:
+                return obj["emailAddress"]
+            return obj
+
+        if "from" in values and isinstance(values["from"], dict):
+            values["from"] = extract_email_address(values["from"])
+
+        for field in ["toRecipients", "ccRecipients", "bccRecipients"]:
+            if field in values and isinstance(values[field], list):
+                values[field] = [extract_email_address(item) for item in values[field]]
+
+        return values
