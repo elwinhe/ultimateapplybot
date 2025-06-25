@@ -20,7 +20,8 @@ dependencies = [
     "requests",
     "python-dateutil",
     "email-validator",
-    "asyncpg"
+    "asyncpg",
+    "eventlet"
 ]
 
 [project.optional-dependencies]

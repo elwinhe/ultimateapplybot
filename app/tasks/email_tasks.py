@@ -34,7 +34,7 @@ except redis.exceptions.ConnectionError as e:
 
 # Use a timestamp as the high-water mark, as this is supported by the Graph API filter.
 REDIS_LAST_SEEN_KEY = "email_processor:last_seen_timestamp"
-
+REDIS_LAST_SEEN_EXPIRY = settings.REDIS_LAST_SEEN_EXPIRY
 
 # Pure Business Logic Function
 def should_process_email(email: Email) -> bool:
@@ -126,8 +126,12 @@ async def pull_and_process_emails() -> None:
             # 8. Update the high-water mark in Redis
             # The newest email is the first one due to the sorting in fetch_messages
             newest_email_timestamp = new_emails[0].received_date_time
-            redis_client.set(REDIS_LAST_SEEN_KEY, newest_email_timestamp.isoformat())
-            logger.info("Updated last-seen timestamp to: %s", newest_email_timestamp.isoformat())
+            redis_client.setex(
+                REDIS_LAST_SEEN_KEY, 
+                settings.REDIS_LAST_SEEN_EXPIRY,
+                newest_email_timestamp.isoformat()
+            )
+            logger.info("Updated last-seen timestamp to: %s (expires in 7 days)", newest_email_timestamp.isoformat())
 
     except (GraphClientError, S3UploadError, PostgresClientError) as e:
         logger.error("A managed error occurred during the email processing task: %s", str(e), exc_info=True)

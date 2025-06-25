@@ -81,7 +81,7 @@ services:
     container_name: emailreader_worker
     restart: unless-stopped
     command: >
-      celery -A app.celery_app.celery worker --loglevel=info
+      celery -A app.celery_app.celery worker --loglevel=info -P eventlet -c 1000
     env_file: .env
     environment:
       <<: *common-env

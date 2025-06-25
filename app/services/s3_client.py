@@ -1,5 +1,5 @@
 """
-app/clients/s3.py
+app/services/s3_client.py
 
 Provides a robust client for interacting with Amazon S3.
 """

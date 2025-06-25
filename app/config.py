@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     # Email processing settings
     TARGET_MAILBOX: str = "inbox"
 
+    REDIS_LAST_SEEN_EXPIRY: int = 604800  # 7 days in seconds
+
     def get_database_url(self) -> str:
         """Construct the database URL from individual components."""
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
