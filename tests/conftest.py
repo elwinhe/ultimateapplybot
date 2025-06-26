@@ -9,29 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
 from app.config import settings
-from app.auth.graph_auth import delegated_auth_client
+from app.auth.graph_auth import DelegatedGraphAuthenticator
 from app.services.graph_client import GraphClient
 from app.services.postgres_client import postgres_client
 from app.services.s3_client import s3_client
 
 # Redis key for storing refresh tokens
 REFRESH_TOKEN_KEY = f"user_refresh_token:{settings.TARGET_EXTERNAL_USER}"
-
-@pytest.fixture(autouse=True)
-def patch_delegated_auth_redis():
-    """
-    Patch the _redis_client attribute of the delegated_auth_client singleton everywhere for all tests.
-    """
-    with patch('app.auth.graph_auth.delegated_auth_client._redis_client', new=MagicMock()):
-        yield
-
-@pytest.fixture(autouse=True)
-def patch_delegated_auth_get_access_token():
-    """
-    Patch the get_access_token_for_user method of delegated_auth_client to always return a test token for all tests.
-    """
-    with patch('app.auth.graph_auth.delegated_auth_client.get_access_token_for_user', new=AsyncMock(return_value="test_access_token")):
-        yield
 
 @pytest.fixture(scope="session")
 def test_redis_client():
@@ -68,35 +52,19 @@ def mock_delegated_auth():
     """
     Mocks the delegated auth client to return a valid access token.
     """
-    with patch('app.auth.graph_auth.delegated_auth_client') as mock_auth:
-        # Mock the get_access_token_for_user method to return a valid token
-        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
-        yield mock_auth
-
-@pytest.fixture
-def mock_graph_client_dependencies():
-    """
-    Provides mocked dependencies for GraphClient tests.
-    """
-    with patch('app.services.graph_client.delegated_auth_client') as mock_auth:
-        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
-        
-        with patch('app.services.graph_client.postgres_client') as mock_postgres:
-            with patch('app.services.graph_client.s3_client') as mock_s3:
-                yield {
-                    'auth': mock_auth,
-                    'postgres': mock_postgres,
-                    's3': mock_s3
-                }
+    mock_auth = MagicMock(spec=DelegatedGraphAuthenticator)
+    mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
+    yield mock_auth
 
 @pytest.fixture
 def mock_email_tasks_dependencies():
     """
     Provides mocked dependencies for email task tests.
     """
-    with patch('app.tasks.email_tasks.delegated_auth_client') as mock_auth:
-        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
-        
+    mock_auth = MagicMock(spec=DelegatedGraphAuthenticator)
+    mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
+    
+    with patch('app.tasks.email_tasks._get_auth_client', return_value=mock_auth):
         with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
             with patch('app.tasks.email_tasks.s3_client') as mock_s3:
                 with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:

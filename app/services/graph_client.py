@@ -6,12 +6,12 @@ Service layer for interacting with the Microsoft Graph API.
 from __future__ import annotations
 
 import logging
-from typing import AsyncGenerator, Iterable, List, Optional, Dict, Any
+from typing import AsyncGenerator, Iterable, List, Optional, Dict
 from datetime import datetime, timezone
 
 import httpx
 
-from app.auth.graph_auth import delegated_auth_client, GraphAuthError
+from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 from app.models.email import Email
 
 logger = logging.getLogger(__name__)
@@ -43,15 +43,21 @@ class GraphClient:
     dependencies for authentication and HTTP requests.
     """
 
-    def __init__(self, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self, 
+        http_client: httpx.AsyncClient, 
+        auth_client: DelegatedGraphAuthenticator
+    ) -> None:
         """
         Initializes the GraphClient with dependencies.
 
         Args:
             http_client: An httpx.AsyncClient for making requests. Reusing the
                          client improves performance.
+            auth_client: An instance of DelegatedGraphAuthenticator for delegated auth.
         """
         self._http_client = http_client
+        self._auth_client = auth_client
         logger.info("GraphClient initialized")
 
     async def _get_auth_headers(self) -> Dict[str, str]:
@@ -66,7 +72,7 @@ class GraphClient:
         """
         logger.debug("Acquiring access token for Graph API call using delegated auth")
         try:
-            token: str = await delegated_auth_client.get_access_token_for_user()
+            token: str = await self._auth_client.get_access_token_for_user()
             return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         except GraphAuthError as e:
             logger.error("Authentication failed while preparing Graph API request: %s", str(e))

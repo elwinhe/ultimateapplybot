@@ -5,9 +5,8 @@ FastAPI router for handling email-related HTTP endpoints.
 Follows Endeavor AI standards for API design, dependency injection, and error handling.
 """
 import logging
-from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import AsyncGenerator, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 

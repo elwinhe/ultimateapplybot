@@ -13,7 +13,7 @@ from typing import List, Optional
 import httpx
 import redis
 
-from app.auth.graph_auth import delegated_auth_client, GraphAuthError
+from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 from app.celery_app import celery
 from app.config import settings
 from app.models.email import Email
@@ -36,6 +36,10 @@ def _get_redis_client():
     except Exception as e:
         logger.error("Failed to connect to Redis: %s", e)
         raise RuntimeError("Failed to connect to Redis") from e
+
+def _get_auth_client() -> DelegatedGraphAuthenticator:
+    """Get the auth client instance."""
+    return DelegatedGraphAuthenticator()
 
 # Pure Business Logic Function
 def should_process_email(email: Email) -> bool:
@@ -60,10 +64,19 @@ def should_process_email(email: Email) -> bool:
 
     return False
 
-async def pull_and_process_emails_logic():
+async def pull_and_process_emails_logic(
+    auth_client: Optional[DelegatedGraphAuthenticator] = None
+):
     """
     Pure business logic for email processing, separated from Celery task for testability.
+    
+    Args:
+        auth_client: Optional auth client instance for dependency injection
     """
+    # Use provided auth client or create new one
+    if auth_client is None:
+        auth_client = _get_auth_client()
+    
     try:
         # Get Redis client
         redis_client = _get_redis_client()
@@ -79,14 +92,14 @@ async def pull_and_process_emails_logic():
 
         # Get access token for delegated authentication
         try:
-            access_token = await delegated_auth_client.get_access_token_for_user()
+            access_token = await auth_client.get_access_token_for_user()
         except GraphAuthError as e:
             logger.error("Could not get access token for user. Task cannot proceed. Error: %s", e)
             return
 
         # Fetch emails from Graph API
         async with httpx.AsyncClient() as http_client:
-            graph_client = GraphClient(http_client=http_client)
+            graph_client = GraphClient(http_client=http_client, auth_client=auth_client)
             
             try:
                 emails = await graph_client.fetch_messages(mailbox="me", since=last_seen)

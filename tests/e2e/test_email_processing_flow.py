@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 import redis
 import boto3
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime, timezone, timedelta
 
 from app.tasks.email_tasks import pull_and_process_emails_logic, REDIS_LAST_SEEN_KEY
@@ -22,6 +22,7 @@ from app.models.email import Email, EmailAddress, Body
 from app.config import settings
 from app.services.postgres_client import postgres_client
 from app.services.s3_client import S3UploadError, s3_client
+from app.auth.graph_auth import DelegatedGraphAuthenticator
 
 
 @pytest_asyncio.fixture
@@ -33,17 +34,43 @@ async def e2e_test_setup(mocker):
     - Provides a live, clean connection to the S3 (moto) and Postgres services.
     - Clears the Redis key to ensure a clean state.
     """
-    # 1. Mock the delegated auth client to return a valid access token
-    mock_auth_client = AsyncMock()
+    # 1. Mock the auth client to return a valid access token
+    mock_auth_client = AsyncMock(spec=DelegatedGraphAuthenticator)
     mock_auth_client.get_access_token_for_user = AsyncMock(return_value="test-access-token")
-    mocker.patch('app.tasks.email_tasks.delegated_auth_client', mock_auth_client)
+    mocker.patch('app.tasks.email_tasks._get_auth_client', return_value=mock_auth_client)
 
-    # 2. Mock the GraphClient's methods to return predictable data
-    mock_graph_client_instance = AsyncMock()
-    mocker.patch('app.tasks.email_tasks.GraphClient', return_value=mock_graph_client_instance)
+    # 2. Patch GraphClient in the task logic to use a mock
+    graph_client_patch = patch('app.tasks.email_tasks.GraphClient')
+    mock_graph_class = graph_client_patch.start()
+    mock_graph = AsyncMock()
+    mock_graph_class.return_value = mock_graph
 
-    # 3. Setup a clean, live Redis environment
-    redis_client = redis.Redis.from_url(settings.REDIS_URL)
+    # 3. Patch S3 and Postgres clients
+    s3_patch = patch('app.tasks.email_tasks.s3_client', s3_client)
+    s3_patch.start()
+    postgres_patch = patch('app.tasks.email_tasks.postgres_client', postgres_client)
+    postgres_patch.start()
+
+    # 4. Patch Redis with proper state tracking
+    redis_patch = patch('app.tasks.email_tasks.redis.Redis')
+    mock_redis_class = redis_patch.start()
+    mock_redis = MagicMock()
+    mock_redis_class.from_url.return_value = mock_redis
+    
+    # Track Redis state for proper mocking
+    redis_state = {}
+    
+    def mock_get(key):
+        return redis_state.get(key)
+    
+    def mock_setex(key, expiry, value):
+        redis_state[key] = value
+    
+    mock_redis.get.side_effect = mock_get
+    mock_redis.setex.side_effect = mock_setex
+
+    # 5. Clean up Redis key
+    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
     redis_client.delete(REDIS_LAST_SEEN_KEY)
 
     # 4. Setup a clean, live S3 (moto) environment
@@ -85,9 +112,13 @@ async def e2e_test_setup(mocker):
     """)
 
     # Yield the mocked graph client so tests can configure its return values
-    yield mock_graph_client_instance
+    yield mock_graph, mock_auth_client, mock_redis
 
-    await postgres_client.close()
+    graph_client_patch.stop()
+    s3_patch.stop()
+    postgres_patch.stop()
+    redis_patch.stop()
+    redis_client.delete(REDIS_LAST_SEEN_KEY)
 
 
 @pytest.mark.asyncio
@@ -112,8 +143,8 @@ async def test_full_email_processing_flow(e2e_test_setup):
         to_addresses=[EmailAddress(address="recipient@example.com")], cc_addresses=[], bcc_addresses=[],
         has_attachments=False,
     )
-    e2e_test_setup.fetch_messages.return_value = [mock_email]
-    e2e_test_setup.fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Invoice"
+    e2e_test_setup[0].fetch_messages.return_value = [mock_email]
+    e2e_test_setup[0].fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Invoice"
 
     # 2. Call the task function directly as a regular async function.
     # This tests the task's logic without involving the Celery broker.
@@ -143,8 +174,7 @@ async def test_full_email_processing_flow(e2e_test_setup):
     assert record["s3_key"] == s3_key
 
     # 5. Verify the high-water mark was updated in Redis
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    new_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
+    new_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
     assert new_timestamp is not None
     assert new_timestamp == now_utc.isoformat()
 
@@ -186,17 +216,17 @@ async def test_no_emails_match_filtering_criteria(e2e_test_setup):
     ]
     
     # Set up mock to return non-matching emails
-    e2e_test_setup.fetch_messages.return_value = non_matching_emails
+    e2e_test_setup[0].fetch_messages.return_value = non_matching_emails
     
     # Track method calls to verify they weren't invoked
-    e2e_test_setup.fetch_eml_content.reset_mock()
+    e2e_test_setup[0].fetch_eml_content.reset_mock()
     
     # Call the task function directly
     await pull_and_process_emails_logic()
     
     
     # 1. Verify that fetch_eml_content was never called (no emails matched criteria)
-    e2e_test_setup.fetch_eml_content.assert_not_called()
+    e2e_test_setup[0].fetch_eml_content.assert_not_called()
     
     # 2. Verify that no files were uploaded to S3
     s3_conn = boto3.client(
@@ -225,8 +255,7 @@ async def test_no_emails_match_filtering_criteria(e2e_test_setup):
         assert record is None, f"Unexpected database record found for email {email.id}"
     
     # 4. Verify the high-water mark was updated to the newest email timestamp
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    new_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
+    new_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
     assert new_timestamp is not None, "High-water mark should be updated even for filtered emails"
     
     # Should be set to the newest email's timestamp (the second email)
@@ -261,8 +290,8 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
         has_attachments=False,
     )
     
-    e2e_test_setup.fetch_messages.return_value = [valid_email]
-    e2e_test_setup.fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Important Invoice"
+    e2e_test_setup[0].fetch_messages.return_value = [valid_email]
+    e2e_test_setup[0].fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Important Invoice"
     
     # Mock S3 client to raise S3UploadError
     mock_upload = AsyncMock(side_effect=S3UploadError("Mock S3 upload failure for testing"))
@@ -273,14 +302,13 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
     )
     
     # Store initial high-water mark to verify it doesn't change
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    initial_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
+    initial_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
         
     # Call the task function - this should fail due to S3 error
     await pull_and_process_emails_logic()
         
     # 1. Verify that fetch_eml_content was called (email passed filtering)
-    e2e_test_setup.fetch_eml_content.assert_called_once_with(
+    e2e_test_setup[0].fetch_eml_content.assert_called_once_with(
         message_id=valid_email.id, 
         mailbox="me"
     )
@@ -315,7 +343,7 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
         pass
     
     # 5. Verify that the high-water mark was NOT updated (most critical assertion)
-    final_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
+    final_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
     assert final_timestamp == initial_timestamp, (
         f"High-water mark should remain unchanged after S3 failure to allow safe retry. "
         f"Initial: {initial_timestamp}, Final: {final_timestamp}"
@@ -352,8 +380,8 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
         has_attachments=False,
     )
     
-    e2e_test_setup.fetch_messages.return_value = [duplicate_email]
-    e2e_test_setup.fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Duplicate Invoice Test"
+    e2e_test_setup[0].fetch_messages.return_value = [duplicate_email]
+    e2e_test_setup[0].fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Duplicate Invoice Test"
     
     # Track S3 upload calls to verify idempotency
     s3_upload_calls = []
@@ -427,8 +455,7 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
     assert record["s3_key"] == s3_key
     
     # Verify high-water mark was updated correctly after both runs
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    final_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
+    final_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
     assert final_timestamp is not None, "High-water mark should be set after processing"
     assert final_timestamp == duplicate_email.received_date_time.isoformat(), (
         f"High-water mark should match the processed email timestamp. "
