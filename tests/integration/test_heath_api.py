@@ -44,7 +44,6 @@ async def test_client(test_app):
         yield client
 
 
-@pytest.mark.asyncio
 def test_health_check_all_services_healthy(test_client):
     """
     Test Case 1: All Services Healthy

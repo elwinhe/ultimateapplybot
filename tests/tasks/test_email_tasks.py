@@ -88,7 +88,7 @@ def mock_dependencies(mocker):
     mocker.patch('app.tasks.email_tasks.settings.REDIS_LAST_SEEN_EXPIRY', 604800) # 7 days
 
     mock_redis = mocker.patch('app.tasks.email_tasks.redis_client')
-    mock_s3 = mocker.patch('app.tasks.email_tasks.s3_client', new_callable=AsyncMock)
+    mock_s3 = mocker.patch('app.tasks.email_tasks.s3_client', new_callable=MagicMock)
     mock_postgres = mocker.patch('app.tasks.email_tasks.postgres_client', new_callable=AsyncMock)
 
     # Mock the GraphClient class and its instance methods
@@ -114,6 +114,9 @@ async def test_pull_and_process_emails_happy_path(mock_dependencies, mock_email_
     mock_dependencies["graph"].fetch_messages.return_value = [mock_email_with_invoice, mock_email_no_match]
     mock_dependencies["graph"].fetch_eml_content.return_value = b"MIME content of the email"
     mock_dependencies["s3"].upload_eml_file.return_value = "emails/invoice_email_123.eml"
+    
+    # Mock the idempotency check to return None (email not processed yet)
+    mock_dependencies["postgres"].fetch_one.return_value = None
 
     # 2. Run the Celery task
     await pull_and_process_emails()
@@ -126,7 +129,7 @@ async def test_pull_and_process_emails_happy_path(mock_dependencies, mock_email_
     mock_dependencies["graph"].fetch_eml_content.assert_awaited_once_with(
         message_id="invoice_email_123", mailbox="test-user@example.com"
     )
-    mock_dependencies["s3"].upload_eml_file.assert_awaited_once()
+    mock_dependencies["s3"].upload_eml_file.assert_called_once()
     mock_dependencies["postgres"].execute.assert_awaited_once()
 
     # Verify that the new high-water mark was set in Redis with an expiry
@@ -146,7 +149,7 @@ async def test_pull_and_process_emails_no_new_emails(mock_dependencies):
 
     # Assert that no processing methods were called
     mock_dependencies["graph"].fetch_eml_content.assert_not_awaited()
-    mock_dependencies["s3"].upload_eml_file.assert_not_awaited()
+    mock_dependencies["s3"].upload_eml_file.assert_not_called()
     mock_dependencies["postgres"].execute.assert_not_awaited()
     mock_dependencies["redis"].setex.assert_not_called() # Check setex specifically
 
@@ -161,7 +164,7 @@ async def test_pull_and_process_emails_handles_service_error_gracefully(mock_dep
     await pull_and_process_emails()
 
     # Verify that no processing occurred after the failure
-    mock_dependencies["s3"].upload_eml_file.assert_not_awaited()
+    mock_dependencies["s3"].upload_eml_file.assert_not_called()
     mock_dependencies["postgres"].execute.assert_not_awaited()
     # The high-water mark should not be updated on failure
     mock_dependencies["redis"].setex.assert_not_called()

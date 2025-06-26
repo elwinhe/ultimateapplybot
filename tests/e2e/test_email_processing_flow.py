@@ -67,6 +67,7 @@ async def e2e_test_setup(mocker):
 
     # 4. Setup a clean, live Postgres environment
     await postgres_client.initialize()
+    await postgres_client.create_tables()
     await postgres_client.execute("TRUNCATE TABLE archived_emails RESTART IDENTITY;")
 
     # Yield the mocked graph client so tests can configure its return values
