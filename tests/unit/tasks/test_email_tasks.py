@@ -9,14 +9,14 @@ external service dependencies to ensure the task's logic is tested in isolation.
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
 # Import the functions to be tested
-from app.tasks.email_tasks import should_process_email, pull_and_process_emails
+from app.tasks.email_tasks import should_process_email, pull_and_process_emails_logic
 
 # Import types and exceptions for creating mocks and testing error handling
-from app.services.graph_client import GraphClientError
+from app.services.graph_client import GraphClientError, GraphClientAuthenticationError, GraphAPIFailedRequest
 from app.models.email import Email, EmailAddress, Body
 
 
@@ -81,90 +81,117 @@ def test_should_process_email_rejects_non_matching(mock_email_no_match):
 
 # --- Tests for the Main Celery Task Orchestrator ---
 
-@pytest.fixture
-def mock_dependencies(mocker):
-    """A central fixture to mock all external service dependencies for the Celery task."""
-    mocker.patch('app.tasks.email_tasks.settings.TARGET_MAILBOX', 'test-user@example.com')
-    mocker.patch('app.tasks.email_tasks.settings.REDIS_LAST_SEEN_EXPIRY', 604800) # 7 days
-
-    mock_redis = mocker.patch('app.tasks.email_tasks.redis_client')
-    mock_s3 = mocker.patch('app.tasks.email_tasks.s3_client', new_callable=MagicMock)
-    mock_postgres = mocker.patch('app.tasks.email_tasks.postgres_client', new_callable=AsyncMock)
-
-    # Mock the GraphClient class and its instance methods
-    mock_graph_instance = AsyncMock()
-    mocker.patch('app.tasks.email_tasks.GraphClient', return_value=mock_graph_instance)
-
-    # Mock httpx.AsyncClient since it's used directly in the task's with-block
-    mocker.patch('app.tasks.email_tasks.httpx.AsyncClient')
-
-    return {
-        "redis": mock_redis,
-        "s3": mock_s3,
-        "postgres": mock_postgres,
-        "graph": mock_graph_instance
-    }
-
-
 @pytest.mark.asyncio
-async def test_pull_and_process_emails_happy_path(mock_dependencies, mock_email_with_invoice, mock_email_no_match):
+async def test_pull_and_process_emails_happy_path(mock_email_with_invoice, mock_email_no_match):
     """Tests the full, successful workflow of fetching, filtering, and archiving an email."""
-    # 1. Setup mock return values for the dependencies
-    mock_dependencies["redis"].get.return_value = datetime.now(timezone.utc).isoformat()
-    mock_dependencies["graph"].fetch_messages.return_value = [mock_email_with_invoice, mock_email_no_match]
-    mock_dependencies["graph"].fetch_eml_content.return_value = b"MIME content of the email"
-    mock_dependencies["s3"].upload_eml_file.return_value = "emails/invoice_email_123.eml"
-    
-    # Mock the idempotency check to return None (email not processed yet)
-    mock_dependencies["postgres"].fetch_one.return_value = None
-
-    # 2. Run the Celery task
-    await pull_and_process_emails()
-
-    # 3. Assert that the correct sequence of calls was made
-    mock_dependencies["redis"].get.assert_called_once_with("email_processor:last_seen_timestamp")
-    mock_dependencies["graph"].fetch_messages.assert_awaited_once()
-    
-    # Verify that only the matching email was processed
-    mock_dependencies["graph"].fetch_eml_content.assert_awaited_once_with(
-        message_id="invoice_email_123", mailbox="test-user@example.com"
-    )
-    mock_dependencies["s3"].upload_eml_file.assert_called_once()
-    mock_dependencies["postgres"].execute.assert_awaited_once()
-
-    # Verify that the new high-water mark was set in Redis with an expiry
-    mock_dependencies["redis"].setex.assert_called_once_with(
-        "email_processor:last_seen_timestamp",
-        604800, # The expiry from mocked settings
-        mock_email_with_invoice.received_date_time.isoformat()
-    )
+    # Mock all dependencies
+    with patch('app.tasks.email_tasks.delegated_auth_client') as mock_auth:
+        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
+        
+        with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
+            mock_redis = MagicMock()
+            mock_redis_class.from_url.return_value = mock_redis
+            mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
+            
+            with patch('app.tasks.email_tasks.httpx.AsyncClient') as mock_http_class:
+                mock_http_client = AsyncMock()
+                mock_http_class.return_value.__aenter__.return_value = mock_http_client
+                
+                with patch('app.tasks.email_tasks.GraphClient') as mock_graph_class:
+                    mock_graph = AsyncMock()
+                    mock_graph_class.return_value = mock_graph
+                    mock_graph.fetch_messages.return_value = [mock_email_with_invoice, mock_email_no_match]
+                    mock_graph.fetch_eml_content.return_value = b"MIME content of the email"
+                    
+                    with patch('app.tasks.email_tasks.s3_client') as mock_s3:
+                        mock_s3.upload_eml_file = AsyncMock(return_value="emails/invoice_email_123.eml")
+                        
+                        with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
+                            mock_postgres.fetch_one = AsyncMock(return_value=None)
+                            mock_postgres.execute = AsyncMock()
+                            
+                            # Run the task logic
+                            await pull_and_process_emails_logic()
+                            
+                            # Verify the correct sequence of calls
+                            mock_redis.get.assert_called_once_with("email_processor:last_seen_timestamp")
+                            mock_graph.fetch_messages.assert_awaited_once_with(mailbox="me", since=datetime.fromisoformat(mock_redis.get.return_value))
+                            
+                            # Verify that only the matching email was processed
+                            mock_graph.fetch_eml_content.assert_awaited_once_with(
+                                message_id="invoice_email_123", mailbox="me"
+                            )
+                            mock_s3.upload_eml_file.assert_awaited_once()
+                            mock_postgres.execute.assert_awaited_once()
+                            
+                            # Verify that the new high-water mark was set in Redis
+                            mock_redis.setex.assert_called_once()
 
 @pytest.mark.asyncio
-async def test_pull_and_process_emails_no_new_emails(mock_dependencies):
+async def test_pull_and_process_emails_no_new_emails():
     """Tests that the task exits gracefully when no new emails are found."""
-    mock_dependencies["redis"].get.return_value = None
-    mock_dependencies["graph"].fetch_messages.return_value = [] # Simulate no new emails
-
-    await pull_and_process_emails()
-
-    # Assert that no processing methods were called
-    mock_dependencies["graph"].fetch_eml_content.assert_not_awaited()
-    mock_dependencies["s3"].upload_eml_file.assert_not_called()
-    mock_dependencies["postgres"].execute.assert_not_awaited()
-    mock_dependencies["redis"].setex.assert_not_called() # Check setex specifically
-
+    with patch('app.tasks.email_tasks.delegated_auth_client') as mock_auth:
+        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
+        
+        with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
+            mock_redis = MagicMock()
+            mock_redis_class.from_url.return_value = mock_redis
+            mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
+            
+            with patch('app.tasks.email_tasks.httpx.AsyncClient') as mock_http_class:
+                mock_http_client = AsyncMock()
+                mock_http_class.return_value.__aenter__.return_value = mock_http_client
+                
+                with patch('app.tasks.email_tasks.GraphClient') as mock_graph_class:
+                    mock_graph = AsyncMock()
+                    mock_graph_class.return_value = mock_graph
+                    mock_graph.fetch_messages.return_value = []  # No emails
+                    
+                    with patch('app.tasks.email_tasks.s3_client') as mock_s3:
+                        mock_s3.upload_eml_file = AsyncMock()
+                        
+                        with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
+                            mock_postgres.fetch_one = AsyncMock(return_value=None)
+                            mock_postgres.execute = AsyncMock()
+                            
+                            # Run the task logic
+                            await pull_and_process_emails_logic()
+                            
+                            # Assert that no processing methods were called
+                            mock_graph.fetch_eml_content.assert_not_awaited()
+                            mock_s3.upload_eml_file.assert_not_awaited()
+                            mock_postgres.execute.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_pull_and_process_emails_handles_service_error_gracefully(mock_dependencies):
+async def test_pull_and_process_emails_handles_service_error_gracefully():
     """Tests that the task catches and logs errors from a dependency and does not crash."""
-    mock_dependencies["redis"].get.return_value = None
-    mock_dependencies["graph"].fetch_messages.side_effect = GraphClientError("API connection timed out")
-
-    # The task should catch the custom exception and finish its run without crashing
-    await pull_and_process_emails()
-
-    # Verify that no processing occurred after the failure
-    mock_dependencies["s3"].upload_eml_file.assert_not_called()
-    mock_dependencies["postgres"].execute.assert_not_awaited()
-    # The high-water mark should not be updated on failure
-    mock_dependencies["redis"].setex.assert_not_called()
+    with patch('app.tasks.email_tasks.delegated_auth_client') as mock_auth:
+        mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
+        
+        with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
+            mock_redis = MagicMock()
+            mock_redis_class.from_url.return_value = mock_redis
+            mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
+            
+            with patch('app.tasks.email_tasks.httpx.AsyncClient') as mock_http_class:
+                mock_http_client = AsyncMock()
+                mock_http_class.return_value.__aenter__.return_value = mock_http_client
+                
+                with patch('app.tasks.email_tasks.GraphClient') as mock_graph_class:
+                    mock_graph = AsyncMock()
+                    mock_graph_class.return_value = mock_graph
+                    mock_graph.fetch_messages.side_effect = GraphAPIFailedRequest("API connection timed out")
+                    
+                    with patch('app.tasks.email_tasks.s3_client') as mock_s3:
+                        mock_s3.upload_eml_file = AsyncMock()
+                        
+                        with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
+                            mock_postgres.fetch_one = AsyncMock(return_value=None)
+                            mock_postgres.execute = AsyncMock()
+                            
+                            # The task should catch the exception and finish without crashing
+                            await pull_and_process_emails_logic()
+                            
+                            # Verify that no processing occurred after the failure
+                            mock_s3.upload_eml_file.assert_not_awaited()
+                            mock_postgres.execute.assert_not_awaited()

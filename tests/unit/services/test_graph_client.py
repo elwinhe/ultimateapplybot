@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 import httpx
 from typing import List
+from unittest.mock import AsyncMock
 
 from app.services.graph_client import (
     GraphClient,
@@ -47,10 +48,12 @@ def mock_graph_email_list_payload() -> dict:
 
 @pytest.fixture
 def mock_authenticator(mocker) -> None:
-    """Mocks the graph_authenticator singleton and its get_access_token method."""
+    """Mocks the delegated_auth_client singleton and its get_access_token_for_user method."""
+    mock_auth = AsyncMock()
+    mock_auth.get_access_token_for_user = AsyncMock(return_value="mock-access-token")
     return mocker.patch(
-        'app.services.graph_client.graph_authenticator.get_access_token',
-        return_value="mock-access-token"
+        'app.services.graph_client.delegated_auth_client',
+        mock_auth
     )
 
 
@@ -69,11 +72,11 @@ async def test_fetch_messages_success(mock_authenticator, mock_graph_email_list_
         graph_client = GraphClient(http_client=http_client)
         
         # 3. Call the method and assert the results
-        emails: List[Email] = await graph_client.fetch_messages(mailbox="test@example.com")
+        emails: List[Email] = await graph_client.fetch_messages(mailbox="me")
         assert len(emails) == 1
         assert isinstance(emails[0], Email)
         assert emails[0].subject == "Project Update"
-        mock_authenticator.assert_called_once()
+        mock_authenticator.get_access_token_for_user.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -82,9 +85,11 @@ async def test_fetch_messages_authentication_failure(mocker):
     Tests that GraphClientAuthenticationError is raised if the authenticator fails.
     """
     # 1. Configure the mock authenticator to raise an error
+    mock_auth = AsyncMock()
+    mock_auth.get_access_token_for_user = AsyncMock(side_effect=GraphAuthError("Invalid credentials"))
     mocker.patch(
-        'app.services.graph_client.graph_authenticator.get_access_token',
-        side_effect=GraphAuthError("Invalid credentials")
+        'app.services.graph_client.delegated_auth_client',
+        mock_auth
     )
     
     # 2. Instantiate the client (the transport doesn't matter as it won't be reached)
@@ -93,7 +98,7 @@ async def test_fetch_messages_authentication_failure(mocker):
 
         # 3. Assert that the correct exception is raised
         with pytest.raises(GraphClientAuthenticationError):
-            await graph_client.fetch_messages(mailbox="test@example.com")
+            await graph_client.fetch_messages(mailbox="me")
 
 
 @pytest.mark.asyncio
@@ -110,7 +115,7 @@ async def test_fetch_messages_api_failure(mock_authenticator):
         graph_client = GraphClient(http_client=http_client)
 
         with pytest.raises(GraphAPIFailedRequest, match="Graph API returned status 404"):
-            await graph_client.fetch_messages(mailbox="nonexistent@example.com")
+            await graph_client.fetch_messages(mailbox="me")
 
 
 @pytest.mark.asyncio
@@ -128,11 +133,11 @@ async def test_fetch_eml_content_success(mock_authenticator):
         
         content: bytes = await graph_client.fetch_eml_content(
             message_id="test-id",
-            mailbox="test@example.com"
+            mailbox="me"
         )
 
         assert content == eml_content
-        mock_authenticator.assert_called_once()
+        mock_authenticator.get_access_token_for_user.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -148,4 +153,4 @@ async def test_fetch_eml_content_api_failure(mock_authenticator):
         graph_client = GraphClient(http_client=http_client)
 
         with pytest.raises(GraphAPIFailedRequest, match="Graph API returned status 500"):
-            await graph_client.fetch_eml_content(message_id="test-id", mailbox="test@example.com")
+            await graph_client.fetch_eml_content(message_id="test-id", mailbox="me")

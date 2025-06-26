@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import AsyncGenerator, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
 # Qualified Internal Imports

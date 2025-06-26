@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Optional
 
-import boto3
-from botocore.client import BaseClient
+import aioboto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.config import settings
@@ -36,13 +36,13 @@ class S3Client:
     """
     Handles all interactions with the Amazon S3 service.
 
-    This class manages the boto3 S3 client instance and provides
+    This class manages the aioboto3 S3 client instance and provides
     high-level methods for file operations like uploading.
     """
 
     def __init__(self, endpoint_url: str | None = None) -> None:
         """
-        Initializes the boto3 S3 client and validates credentials/bucket access.
+        Initializes the aioboto3 S3 client and validates credentials/bucket access.
         
         Args:
             endpoint_url: Optional endpoint URL for testing (e.g., moto mock service)
@@ -50,32 +50,22 @@ class S3Client:
         Raises:
             S3ValidationError: If credentials are invalid or bucket is inaccessible.
         """
-        try:
-            client_kwargs = {
-                "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
-                "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
-                "region_name": settings.AWS_REGION,
-            }
-            
-            # Add endpoint URL for testing (moto mock service)
-            if endpoint_url:
-                client_kwargs["endpoint_url"] = endpoint_url
-                # Use dummy credentials for mock service
-                client_kwargs["aws_access_key_id"] = "test"
-                client_kwargs["aws_secret_access_key"] = "test"
-            
-            self._s3_client: BaseClient = boto3.client("s3", **client_kwargs)
-            logger.info("S3 client initialized successfully")
-            
-            # Only validate bucket access if not using a mock endpoint
-            if not endpoint_url:
-                self._validate_s3_access()
-            
-        except (BotoCoreError, ClientError) as e:
-            logger.critical("Failed to initialize S3 client: %s", str(e), exc_info=True)
-            raise S3ValidationError("Could not establish connection to S3") from e
+        self._endpoint_url = endpoint_url
+        self._session = aioboto3.Session()
+        
+        # Store credentials for async operations
+        self._aws_access_key_id = settings.AWS_ACCESS_KEY_ID
+        self._aws_secret_access_key = settings.AWS_SECRET_ACCESS_KEY
+        self._region_name = settings.AWS_REGION
+        
+        # Use dummy credentials for mock service
+        if endpoint_url:
+            self._aws_access_key_id = "test"
+            self._aws_secret_access_key = "test"
+        
+        logger.info("S3 client initialized successfully")
 
-    def _validate_s3_access(self) -> None:
+    async def _validate_s3_access(self) -> None:
         """
         Validates that the S3 client can access the configured bucket.
         
@@ -83,8 +73,15 @@ class S3Client:
             S3ValidationError: If bucket access validation fails.
         """
         try:
-            self._s3_client.head_bucket(Bucket=settings.S3_BUCKET_NAME)
-            logger.info("S3 bucket '%s' access validated successfully", settings.S3_BUCKET_NAME)
+            async with self._session.client(
+                "s3",
+                aws_access_key_id=self._aws_access_key_id,
+                aws_secret_access_key=self._aws_secret_access_key,
+                region_name=self._region_name,
+                endpoint_url=self._endpoint_url
+            ) as s3_client:
+                await s3_client.head_bucket(Bucket=settings.S3_BUCKET_NAME)
+                logger.info("S3 bucket '%s' access validated successfully", settings.S3_BUCKET_NAME)
         except ClientError as e:
             error_code: str = e.response.get("Error", {}).get("Code", "Unknown")
             logger.critical("S3 bucket validation failed: %s", error_code, exc_info=True)
@@ -115,7 +112,7 @@ class S3Client:
         if len(filename.encode('utf-8')) > 1024:
             raise ValueError("Filename too long")
 
-    def upload_eml_file(self, filename: str, content: bytes) -> str:
+    async def upload_eml_file(self, filename: str, content: bytes) -> str:
         """
         Uploads the raw byte content of an .eml file to a specific path in S3.
 
@@ -145,14 +142,21 @@ class S3Client:
                    s3_object_key, bucket, len(content))
 
         try:
-            self._s3_client.put_object(
-                Bucket=bucket,
-                Key=s3_object_key,
-                Body=content,
-                ContentType='message/rfc822' # Set the correct MIME type for .eml files
-            )
-            logger.info("Successfully uploaded '%s' to S3", s3_object_key)
-            return s3_object_key
+            async with self._session.client(
+                "s3",
+                aws_access_key_id=self._aws_access_key_id,
+                aws_secret_access_key=self._aws_secret_access_key,
+                region_name=self._region_name,
+                endpoint_url=self._endpoint_url
+            ) as s3_client:
+                await s3_client.put_object(
+                    Bucket=bucket,
+                    Key=s3_object_key,
+                    Body=content,
+                    ContentType='message/rfc822' # Set the correct MIME type for .eml files
+                )
+                logger.info("Successfully uploaded '%s' to S3", s3_object_key)
+                return s3_object_key
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")

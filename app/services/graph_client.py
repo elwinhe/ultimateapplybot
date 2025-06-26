@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from app.auth.graph_auth import graph_authenticator, GraphAuthError
+from app.auth.graph_auth import delegated_auth_client, GraphAuthError
 from app.models.email import Email
 
 logger = logging.getLogger(__name__)
@@ -64,9 +64,9 @@ class GraphClient:
         Raises:
             GraphClientAuthenticationError: If authentication fails.
         """
-        logger.debug("Acquiring access token for Graph API call")
+        logger.debug("Acquiring access token for Graph API call using delegated auth")
         try:
-            token: str = graph_authenticator.get_access_token()
+            token: str = await delegated_auth_client.get_access_token_for_user()
             return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         except GraphAuthError as e:
             logger.error("Authentication failed while preparing Graph API request: %s", str(e))
@@ -106,8 +106,9 @@ class GraphClient:
         if select:
             params["$select"] = ",".join(select)
 
-        url = f"{_GRAPH_BASE_URL}/users/{mailbox}/messages"
-        logger.info("Fetching messages from mailbox '%s' with params: %s", mailbox, params)
+        # Use /me endpoint for delegated auth
+        url = f"{_GRAPH_BASE_URL}/me/messages"
+        logger.info("Fetching messages from authenticated user's mailbox with params: %s", params)
 
         try:
             headers = await self._get_auth_headers()
@@ -143,8 +144,9 @@ class GraphClient:
         Raises:
             GraphAPIFailedRequest: If the API returns a non-2xx status code.
         """
-        url = f"{_GRAPH_BASE_URL}/users/{mailbox}/messages/{message_id}/$value"
-        logger.info("Fetching EML content for message ID '%s'", message_id)
+        # Use /me endpoint for delegated auth
+        url = f"{_GRAPH_BASE_URL}/me/messages/{message_id}/$value"
+        logger.info("Fetching EML content for message ID '%s' from authenticated user's mailbox", message_id)
 
         try:
             headers = await self._get_auth_headers()

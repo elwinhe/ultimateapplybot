@@ -38,7 +38,7 @@ class PostgresClient:
     def __init__(self) -> None:
         """Initializes the PostgreSQL client."""
         self._pool: Optional[Pool] = None
-        self._connection_string: str = settings.get_database_url()
+        self._connection_string: str = settings.DATABASE_URL
 
     async def initialize(self) -> None:
         """
@@ -194,6 +194,9 @@ class PostgresClient:
         CREATE TABLE IF NOT EXISTS archived_emails (
             message_id VARCHAR(255) PRIMARY KEY,
             subject TEXT,
+            received_date_time TIMESTAMP WITH TIME ZONE,
+            from_address VARCHAR(255),
+            to_addresses TEXT[],
             s3_key VARCHAR(1024),
             archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );

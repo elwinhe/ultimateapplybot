@@ -16,7 +16,7 @@ import boto3
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone, timedelta
 
-from app.tasks.email_tasks import pull_and_process_emails, REDIS_LAST_SEEN_KEY
+from app.tasks.email_tasks import pull_and_process_emails_logic, REDIS_LAST_SEEN_KEY
 
 from app.models.email import Email, EmailAddress, Body
 from app.config import settings
@@ -29,18 +29,24 @@ async def e2e_test_setup(mocker):
     """
     A comprehensive fixture to set up the E2E test environment.
     - Mocks the GraphClient to simulate API responses.
+    - Mocks the delegated auth client to provide access tokens.
     - Provides a live, clean connection to the S3 (moto) and Postgres services.
     - Clears the Redis key to ensure a clean state.
     """
-    # 1. Mock the GraphClient's methods to return predictable data
+    # 1. Mock the delegated auth client to return a valid access token
+    mock_auth_client = AsyncMock()
+    mock_auth_client.get_access_token_for_user = AsyncMock(return_value="test-access-token")
+    mocker.patch('app.tasks.email_tasks.delegated_auth_client', mock_auth_client)
+
+    # 2. Mock the GraphClient's methods to return predictable data
     mock_graph_client_instance = AsyncMock()
     mocker.patch('app.tasks.email_tasks.GraphClient', return_value=mock_graph_client_instance)
 
-    # 2. Setup a clean, live Redis environment
+    # 3. Setup a clean, live Redis environment
     redis_client = redis.Redis.from_url(settings.REDIS_URL)
     redis_client.delete(REDIS_LAST_SEEN_KEY)
 
-    # 3. Setup a clean, live S3 (moto) environment
+    # 4. Setup a clean, live S3 (moto) environment
     s3_conn = boto3.client(
         "s3", 
         region_name=settings.AWS_REGION,
@@ -60,10 +66,23 @@ async def e2e_test_setup(mocker):
     except s3_conn.exceptions.BucketAlreadyExists:
         pass # It's okay if it already exists from a previous run
 
-    # 4. Setup a clean, live Postgres environment
+    # 5. Setup a clean, live Postgres environment
     await postgres_client.initialize()
     await postgres_client.create_tables()
-    await postgres_client.execute("TRUNCATE TABLE archived_emails RESTART IDENTITY;")
+    
+    # Drop and recreate archived_emails table to ensure new schema
+    await postgres_client.execute("DROP TABLE IF EXISTS archived_emails CASCADE;")
+    await postgres_client.execute("""
+        CREATE TABLE archived_emails (
+            message_id VARCHAR(255) PRIMARY KEY,
+            subject TEXT,
+            received_date_time TIMESTAMP WITH TIME ZONE,
+            from_address VARCHAR(255),
+            to_addresses TEXT[],
+            s3_key VARCHAR(1024),
+            archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+    """)
 
     # Yield the mocked graph client so tests can configure its return values
     yield mock_graph_client_instance
@@ -98,7 +117,7 @@ async def test_full_email_processing_flow(e2e_test_setup):
 
     # 2. Call the task function directly as a regular async function.
     # This tests the task's logic without involving the Celery broker.
-    await pull_and_process_emails()
+    await pull_and_process_emails_logic()
 
     # 3. Verify the file was uploaded to S3
     s3_conn = boto3.client(
@@ -173,7 +192,7 @@ async def test_no_emails_match_filtering_criteria(e2e_test_setup):
     e2e_test_setup.fetch_eml_content.reset_mock()
     
     # Call the task function directly
-    await pull_and_process_emails()
+    await pull_and_process_emails_logic()
     
     
     # 1. Verify that fetch_eml_content was never called (no emails matched criteria)
@@ -246,10 +265,11 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
     e2e_test_setup.fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Important Invoice"
     
     # Mock S3 client to raise S3UploadError
+    mock_upload = AsyncMock(side_effect=S3UploadError("Mock S3 upload failure for testing"))
     mocker.patch.object(
         s3_client, 
         'upload_eml_file', 
-        side_effect=S3UploadError("Mock S3 upload failure for testing")
+        mock_upload
     )
     
     # Store initial high-water mark to verify it doesn't change
@@ -257,16 +277,16 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
     initial_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
         
     # Call the task function - this should fail due to S3 error
-    await pull_and_process_emails()
+    await pull_and_process_emails_logic()
         
     # 1. Verify that fetch_eml_content was called (email passed filtering)
     e2e_test_setup.fetch_eml_content.assert_called_once_with(
         message_id=valid_email.id, 
-        mailbox=settings.TARGET_MAILBOX
+        mailbox="me"
     )
     
     # 2. Verify that S3 upload was attempted (and failed)
-    s3_client.upload_eml_file.assert_called_once_with(
+    mock_upload.assert_awaited_once_with(
         filename=f"{valid_email.id}.eml",
         content=b"From: billing@example.com\nSubject: Important Invoice"
     )
@@ -339,20 +359,20 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
     s3_upload_calls = []
     original_upload = s3_client.upload_eml_file
     
-    def track_upload_calls(*args, **kwargs):
+    async def track_upload_calls(*args, **kwargs):
         s3_upload_calls.append((args, kwargs))
-        return original_upload(*args, **kwargs)
+        return await original_upload(*args, **kwargs)
     
     # Mock S3 client to track upload calls
     with patch.object(s3_client, 'upload_eml_file', side_effect=track_upload_calls):
         # First run - should process the email normally
-        await pull_and_process_emails()
+        await pull_and_process_emails_logic()
         
         # Verify first run completed successfully
         assert len(s3_upload_calls) == 1, "S3 upload should be called once in first run"
         
         # Second run - should skip processing due to idempotency
-        await pull_and_process_emails()
+        await pull_and_process_emails_logic()
     
     # Verify total S3 upload calls across both runs
     assert len(s3_upload_calls) == 1, (
