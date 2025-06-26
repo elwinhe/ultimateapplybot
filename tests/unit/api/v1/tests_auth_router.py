@@ -10,6 +10,7 @@ endpoints correctly handle redirection, token acquisition, and errors.
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from collections.abc import Generator
 
 import pytest
 from fastapi import FastAPI
@@ -37,7 +38,7 @@ def mock_auth_client() -> AsyncMock:
 
 
 @pytest.fixture
-def client(test_app: FastAPI, mock_auth_client: AsyncMock) -> TestClient:
+def client(test_app: FastAPI, mock_auth_client: AsyncMock) -> Generator[TestClient, None, None]:
     """
     Provides a FastAPI TestClient with the DelegatedGraphAuthenticator
     dependency overridden for isolated testing.
@@ -71,13 +72,10 @@ async def test_callback_success(client: TestClient, mock_auth_client: AsyncMock)
     Tests the happy path for the /callback endpoint where the auth code is
     successfully exchanged for a token.
     """
-    # 1. Arrange: The mock's acquire_token method will do nothing on success
     mock_auth_client.acquire_token_by_auth_code = AsyncMock()
 
-    # 2. Act
     response = client.get("/auth/callback?code=valid-auth-code")
 
-    # 3. Assert
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
@@ -109,9 +107,7 @@ def test_callback_handles_invalid_code_format(client: TestClient):
     Tests that the endpoint's internal validation catches a malformed code
     before it even reaches the service layer.
     """
-    # Act: Make a request with a very short, invalid code
     response = client.get("/auth/callback?code=short")
 
-    # Assert
     assert response.status_code == 400
     assert "Invalid authorization code format" in response.json()["detail"]

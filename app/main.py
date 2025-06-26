@@ -18,6 +18,7 @@ from fastapi import FastAPI
 
 from app.api.v1 import email as email_v1_router
 from app.api.v1 import health as health_v1_router
+from app.api.v1 import auth_router
 from app.config import settings
 from app.services.postgres_client import postgres_client
 
@@ -63,6 +64,9 @@ def create_app() -> FastAPI:
 
     # Mount the main v1 API router with a prefix.
     app.include_router(email_v1_router.router, prefix="/api/v1")
+    
+    # Mount the auth router with the v1 prefix.
+    app.include_router(auth_router.router, prefix="/api/v1")
 
     logger.info("Application created and routers included.")
     return app

@@ -22,8 +22,6 @@ from app.api.v1.health import router as health_router
 from app.services.postgres_client import PostgresConnectionError
 
 
-# --- Test Application Setup ---
-
 @pytest.fixture
 def test_app() -> FastAPI:
     """Creates a minimal FastAPI app instance including only the health router."""
@@ -39,7 +37,6 @@ def client(test_app: FastAPI) -> Generator[TestClient, None, None]:
         yield client
 
 
-# --- Test Cases ---
 
 def test_health_check_all_services_healthy(client: TestClient):
     """
