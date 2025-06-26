@@ -100,8 +100,8 @@ async def test_pull_and_process_emails_happy_path(mock_email_with_invoice, mock_
     await pull_and_process_emails_logic()
 
     mock_redis.get.assert_called_once_with("email_processor:last_seen_timestamp")
-    mock_graph.fetch_messages.assert_awaited_once_with(mailbox="me", since=datetime.fromisoformat(mock_redis.get.return_value))
-    mock_graph.fetch_eml_content.assert_awaited_once_with(message_id="invoice_email_123", mailbox="me")
+    mock_graph.fetch_messages.assert_awaited_once_with(since=datetime.fromisoformat(mock_redis.get.return_value))
+    mock_graph.fetch_eml_content.assert_awaited_once_with(message_id="invoice_email_123")
     mock_s3.upload_eml_file.assert_awaited_once()
     mock_postgres.execute.assert_awaited_once()
     mock_redis.setex.assert_called_once()

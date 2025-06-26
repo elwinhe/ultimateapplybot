@@ -37,7 +37,6 @@ async def e2e_test_setup(mocker):
     # 1. Mock the auth client to return a valid access token
     mock_auth_client = AsyncMock(spec=DelegatedGraphAuthenticator)
     mock_auth_client.get_access_token_for_user = AsyncMock(return_value="test-access-token")
-    mocker.patch('app.tasks.email_tasks._get_auth_client', return_value=mock_auth_client)
 
     # 2. Patch GraphClient in the task logic to use a mock
     graph_client_patch = patch('app.tasks.email_tasks.GraphClient')
@@ -309,8 +308,7 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
         
     # 1. Verify that fetch_eml_content was called (email passed filtering)
     e2e_test_setup[0].fetch_eml_content.assert_called_once_with(
-        message_id=valid_email.id, 
-        mailbox="me"
+        message_id=valid_email.id
     )
     
     # 2. Verify that S3 upload was attempted (and failed)

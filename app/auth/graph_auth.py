@@ -1,12 +1,13 @@
 """
 app/auth/graph_auth.py
 
-Handles OAuth 2.0 Authorization Code Flow for Microsoft Graph API.
+Provides a robust, fully asynchronous authentication client for the Microsoft
+Graph API using httpx for non-blocking token acquisition.
 """
 import logging
-from typing import Optional
 import redis
-from msal import ConfidentialClientApplication
+import httpx
+from typing import Optional
 
 from app.config import settings
 
@@ -32,13 +33,14 @@ class GraphAuthTokenError(GraphAuthError):
 
 
 class DelegatedGraphAuthenticator:
-    """Manages the delegated authentication flow."""
+    """Manages the delegated authentication flow with full async support."""
 
-    def __init__(self, redis_url: Optional[str] = None) -> None:
+    def __init__(self, http_client: Optional[httpx.AsyncClient] = None, redis_url: Optional[str] = None) -> None:
         """
         Initialize the authenticator.
         
         Args:
+            http_client: Optional httpx.AsyncClient for dependency injection
             redis_url: Optional Redis URL override for testing
         """
         if not settings.CLIENT_ID:
@@ -50,15 +52,12 @@ class DelegatedGraphAuthenticator:
         if not settings.TARGET_EXTERNAL_USER:
             raise GraphAuthValidationError("TARGET_EXTERNAL_USER is required")
         
-        # Use 'common' authority to support both work/school and personal accounts
-        authority = "https://login.microsoftonline.com/common"
+        # Store the HTTP client for async operations
+        self._http_client = http_client
+        self._token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        self._auth_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
         
         try:
-            self._app = ConfidentialClientApplication(
-                settings.CLIENT_ID,
-                authority=authority,
-                client_credential=settings.CLIENT_SECRET,
-            )
             self._redis_client = redis.Redis.from_url(
                 redis_url or settings.REDIS_URL, 
                 decode_responses=True
@@ -79,19 +78,24 @@ class DelegatedGraphAuthenticator:
             GraphAuthError: If URL generation fails
         """
         try:
-            auth_url = self._app.get_authorization_request_url(
-                scopes=["Mail.Read", "offline_access"],
-                redirect_uri=settings.REDIRECT_URI
-            )
+            params = {
+                "client_id": settings.CLIENT_ID,
+                "response_type": "code",
+                "redirect_uri": settings.REDIRECT_URI,
+                "scope": "Mail.Read offline_access",
+                "response_mode": "query"
+            }
+            request = httpx.Request("GET", self._auth_url, params=params)
+            auth_url = str(request.url)
             logger.debug("Generated auth flow URL", extra={"redirect_uri": settings.REDIRECT_URI})
             return auth_url
         except Exception as e:
             logger.error("Failed to generate auth flow URL", extra={"error": str(e)})
             raise GraphAuthError("Failed to generate authentication URL") from e
 
-    def acquire_token_by_auth_code(self, auth_code: str) -> None:
+    async def acquire_token_by_auth_code(self, auth_code: str) -> None:
         """
-        Acquires tokens using an authorization code and securely stores the refresh token.
+        Asynchronously acquires tokens using an authorization code and securely stores the refresh token.
         
         Args:
             auth_code: The authorization code from Microsoft
@@ -104,12 +108,26 @@ class DelegatedGraphAuthenticator:
         if not auth_code or len(auth_code) < 10:
             raise GraphAuthValidationError("Invalid authorization code format")
         
+        if not self._http_client:
+            raise GraphAuthError("HTTP client not available for async token acquisition")
+        
+        token_data = {
+            "grant_type": "authorization_code",
+            "client_id": settings.CLIENT_ID,
+            "client_secret": settings.CLIENT_SECRET,
+            "scope": "Mail.Read offline_access",
+            "code": auth_code,
+            "redirect_uri": settings.REDIRECT_URI,
+        }
+        
         try:
-            result = self._app.acquire_token_by_authorization_code(
-                auth_code,
-                scopes=["Mail.Read", "offline_access"],
-                redirect_uri=settings.REDIRECT_URI
-            )
+            response = await self._http_client.post(self._token_url, data=token_data)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                logger.error("HTTP error exchanging auth code for token: %s", e.response.text, exc_info=True)
+                raise GraphAuthTokenError(f"Failed to exchange authorization code for token: {e.response.text}") from e
+            result = await response.json()
             
             if "error" in result:
                 logger.error("Token acquisition failed", extra={"error": result.get("error")})
@@ -135,7 +153,7 @@ class DelegatedGraphAuthenticator:
 
     async def get_access_token_for_user(self) -> str:
         """
-        Acquires a new access token using a stored refresh token.
+        Asynchronously acquires a new access token using a stored refresh token.
         This is the method the background task will call.
         
         Returns:
@@ -145,6 +163,9 @@ class DelegatedGraphAuthenticator:
             GraphAuthTokenError: If no refresh token is found or refresh fails
             GraphAuthError: For other authentication errors
         """
+        if not self._http_client:
+            raise GraphAuthError("HTTP client not available for async token acquisition")
+        
         try:
             refresh_token = self._redis_client.get(REFRESH_TOKEN_KEY)
             if not refresh_token:
@@ -153,10 +174,21 @@ class DelegatedGraphAuthenticator:
                     "Please re-authenticate via /api/v1/auth/login."
                 )
 
-            result = self._app.acquire_token_by_refresh_token(
-                refresh_token,
-                scopes=["Mail.Read"]
-            )
+            token_data = {
+                "grant_type": "refresh_token",
+                "client_id": settings.CLIENT_ID,
+                "client_secret": settings.CLIENT_SECRET,
+                "scope": "Mail.Read",
+                "refresh_token": refresh_token,
+            }
+            
+            response = await self._http_client.post(self._token_url, data=token_data)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                logger.error("HTTP error refreshing token: %s", e.response.text, exc_info=True)
+                raise GraphAuthTokenError(f"Failed to acquire token via refresh token: {e.response.text}") from e
+            result = await response.json()
             
             if "access_token" not in result:
                 logger.error("Token refresh failed", extra={"error": result.get("error")})

@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone
 import importlib
 import os
+import httpx
 
 from app.auth.graph_auth import (
     DelegatedGraphAuthenticator, 
@@ -20,15 +21,15 @@ class TestDelegatedGraphAuthenticator:
 
     def test_init_success(self):
         """Test successful initialization with valid settings."""
-        with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                mock_redis_class.from_url.return_value = Mock()
-                
-                authenticator = DelegatedGraphAuthenticator()
-                
-                assert authenticator is not None
-                mock_msal_class.assert_called_once()
-                mock_redis_class.from_url.assert_called_once()
+        mock_http_client = Mock()
+        with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+            mock_redis_class.from_url.return_value = Mock()
+            
+            authenticator = DelegatedGraphAuthenticator(http_client=mock_http_client)
+            
+            assert authenticator is not None
+            assert authenticator._http_client == mock_http_client
+            mock_redis_class.from_url.assert_called_once()
 
     def test_init_missing_client_id(self):
         """Test initialization fails when CLIENT_ID is missing."""
@@ -72,18 +73,17 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
-                mock_app.get_authorization_request_url.return_value = "https://login.microsoftonline.com/..."
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = Mock()
                 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = Mock()
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    url = authenticator.get_auth_flow_url()
-                    
-                    assert url == "https://login.microsoftonline.com/..."
-                    mock_app.get_authorization_request_url.assert_called_once()
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator()
+                url = authenticator.get_auth_flow_url()
+                
+                assert "login.microsoftonline.com" in url
+                assert "client_id=dummy-client-id" in url
+                assert "redirect_uri=http%3A%2F%2Flocalhost%2Fcallback" in url  # Fixed encoding
+                assert "scope=Mail.Read+offline_access" in url
 
     def test_get_auth_flow_url_failure(self):
         """Test auth flow URL generation failure."""
@@ -95,19 +95,15 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
-                mock_app.get_authorization_request_url.side_effect = Exception("MSAL error")
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.side_effect = Exception("Redis error")
                 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = Mock()
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    
-                    with pytest.raises(graph_auth_module.GraphAuthError, match="Failed to generate authentication URL"):
-                        authenticator.get_auth_flow_url()
+                with pytest.raises(graph_auth_module.GraphAuthError, match="Failed to initialize authentication client"):
+                    graph_auth_module.DelegatedGraphAuthenticator()
 
-    def test_acquire_token_by_auth_code_success(self):
+    @pytest.mark.asyncio
+    async def test_acquire_token_by_auth_code_success(self):
         """Test successful token acquisition with auth code."""
         with patch.dict(os.environ, {
             "CLIENT_ID": "dummy-client-id",
@@ -117,25 +113,29 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
-                mock_app.acquire_token_by_authorization_code.return_value = {
-                    'access_token': 'fake-access-token',
-                    'refresh_token': 'fake-refresh-token',
-                    'expires_in': 3600
-                }
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.raise_for_status.return_value = None
+            mock_response.json.return_value = {
+                'access_token': 'fake-access-token',
+                'refresh_token': 'fake-refresh-token',
+                'expires_in': 3600
+            }
+            mock_http_client.post.return_value = mock_response
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis = Mock()
+                mock_redis_class.from_url.return_value = mock_redis
                 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis = Mock()
-                    mock_redis_class.from_url.return_value = mock_redis
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    authenticator.acquire_token_by_auth_code("valid_auth_code_123")
-                    
-                    mock_app.acquire_token_by_authorization_code.assert_called_once()
-                    mock_redis.set.assert_called_once()
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
+                await authenticator.acquire_token_by_auth_code("valid_auth_code_123")
+                
+                mock_http_client.post.assert_called_once()
+                mock_redis.set.assert_called_once()
 
-    def test_acquire_token_by_auth_code_invalid_code(self):
+    @pytest.mark.asyncio
+    async def test_acquire_token_by_auth_code_invalid_code(self):
         """Test token acquisition with invalid auth code."""
         with patch.dict(os.environ, {
             "CLIENT_ID": "dummy-client-id",
@@ -145,16 +145,17 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = Mock()
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    
-                    with pytest.raises(graph_auth_module.GraphAuthValidationError, match="Invalid authorization code format"):
-                        authenticator.acquire_token_by_auth_code("short")
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = Mock()
+                
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator()
+                
+                with pytest.raises(graph_auth_module.GraphAuthValidationError, match="Invalid authorization code format"):
+                    await authenticator.acquire_token_by_auth_code("short")
 
-    def test_acquire_token_by_auth_code_no_refresh_token(self):
+    @pytest.mark.asyncio
+    async def test_acquire_token_by_auth_code_no_refresh_token(self):
         """Test token acquisition when no refresh token is returned."""
         with patch.dict(os.environ, {
             "CLIENT_ID": "dummy-client-id",
@@ -164,24 +165,28 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
-                mock_app.acquire_token_by_authorization_code.return_value = {
-                    'access_token': 'fake-access-token',
-                    'expires_in': 3600
-                    # No refresh_token
-                }
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.raise_for_status.return_value = None
+            mock_response.json.return_value = {
+                'access_token': 'fake-access-token',
+                'expires_in': 3600
+                # No refresh_token
+            }
+            mock_http_client.post.return_value = mock_response
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = Mock()
                 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = Mock()
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    
-                    with pytest.raises(graph_auth_module.GraphAuthTokenError, match="No refresh token returned"):
-                        authenticator.acquire_token_by_auth_code("valid_auth_code_123")
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
+                
+                with pytest.raises(graph_auth_module.GraphAuthTokenError, match="No refresh token returned"):
+                    await authenticator.acquire_token_by_auth_code("valid_auth_code_123")
 
-    def test_acquire_token_by_auth_code_msal_error(self):
-        """Test token acquisition when MSAL returns an error."""
+    @pytest.mark.asyncio
+    async def test_acquire_token_by_auth_code_http_error(self):
+        """Test token acquisition when HTTP request fails."""
         with patch.dict(os.environ, {
             "CLIENT_ID": "dummy-client-id",
             "CLIENT_SECRET": "dummy-client-secret",
@@ -190,20 +195,23 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
-                mock_app.acquire_token_by_authorization_code.return_value = {
-                    'error': 'invalid_grant',
-                    'error_description': 'Authorization code expired'
-                }
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.text = "invalid_grant"
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "400 Bad Request", request=Mock(), response=mock_response
+            )
+            mock_response.json.side_effect = Exception("Should not be called")
+            mock_http_client.post.return_value = mock_response
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = Mock()
                 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = Mock()
-                    
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    
-                    with pytest.raises(graph_auth_module.GraphAuthTokenError, match="Authorization code expired"):
-                        authenticator.acquire_token_by_auth_code("valid_auth_code_123")
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
+                
+                with pytest.raises(graph_auth_module.GraphAuthError, match="Failed to acquire authentication tokens"):
+                    await authenticator.acquire_token_by_auth_code("valid_auth_code_123")
 
     @pytest.mark.asyncio
     async def test_get_access_token_for_user_success(self):
@@ -216,26 +224,27 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.raise_for_status.return_value = None
+            mock_response.json.return_value = {
+                'access_token': 'fake-access-token-123',
+                'expires_in': 3600
+            }
+            mock_http_client.post.return_value = mock_response
 
-                # Mock Redis to return a refresh token
-                mock_redis = Mock()
-                mock_redis.get.return_value = 'test_refresh_token'
+            # Mock Redis to return a refresh token
+            mock_redis = Mock()
+            mock_redis.get.return_value = 'test_refresh_token'
 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = mock_redis
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = mock_redis
 
-                    # Mock successful token acquisition
-                    mock_app.acquire_token_by_refresh_token.return_value = {
-                        'access_token': 'fake-access-token-123',
-                        'expires_in': 3600
-                    }
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
+                token = await authenticator.get_access_token_for_user()
 
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    token = await authenticator.get_access_token_for_user()
-
-                    assert token == 'fake-access-token-123'
+                assert token == 'fake-access-token-123'
 
     @pytest.mark.asyncio
     async def test_get_access_token_for_user_no_refresh_token(self):
@@ -248,17 +257,18 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_redis = Mock()
-                mock_redis.get.return_value = None  # No refresh token
+            
+            mock_http_client = AsyncMock()  # Provide HTTP client
+            mock_redis = Mock()
+            mock_redis.get.return_value = None  # No refresh token
 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = mock_redis
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = mock_redis
 
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
 
-                    with pytest.raises(graph_auth_module.GraphAuthTokenError, match="No refresh token found for user"):
-                        await authenticator.get_access_token_for_user()
+                with pytest.raises(graph_auth_module.GraphAuthTokenError, match="No refresh token found for user"):
+                    await authenticator.get_access_token_for_user()
 
     @pytest.mark.asyncio
     async def test_get_access_token_for_user_refresh_failure(self):
@@ -271,26 +281,27 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.text = "invalid_grant"
+            mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "400 Bad Request", request=Mock(), response=mock_response
+            )
+            mock_response.json.side_effect = Exception("Should not be called")
+            mock_http_client.post.return_value = mock_response
 
-                # Mock Redis to return a refresh token
-                mock_redis = Mock()
-                mock_redis.get.return_value = 'test_refresh_token'
+            # Mock Redis to return a refresh token
+            mock_redis = Mock()
+            mock_redis.get.return_value = 'test_refresh_token'
 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = mock_redis
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = mock_redis
 
-                    # Mock failed token acquisition
-                    mock_app.acquire_token_by_refresh_token.return_value = {
-                        'error': 'invalid_grant',
-                        'error_description': 'Refresh token expired'
-                    }
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
 
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-
-                    with pytest.raises(graph_auth_module.GraphAuthTokenError, match="Refresh token expired"):
-                        await authenticator.get_access_token_for_user()
+                with pytest.raises(graph_auth_module.GraphAuthError, match="Failed to refresh access token"):
+                    await authenticator.get_access_token_for_user()
 
     @pytest.mark.asyncio
     async def test_get_access_token_for_user_with_new_refresh_token(self):
@@ -303,26 +314,47 @@ class TestDelegatedGraphAuthenticator:
         }):
             importlib.reload(importlib.import_module('app.config'))
             graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
-            with patch('app.auth.graph_auth.ConfidentialClientApplication') as mock_msal_class:
-                mock_app = mock_msal_class.return_value
+            
+            mock_http_client = AsyncMock()
+            mock_response = AsyncMock()
+            mock_response.raise_for_status.return_value = None
+            mock_response.json.return_value = {
+                'access_token': 'new-access-token',
+                'refresh_token': 'new_refresh_token',
+                'expires_in': 3600
+            }
+            mock_http_client.post.return_value = mock_response
 
-                # Mock Redis to return a refresh token
-                mock_redis = Mock()
-                mock_redis.get.return_value = 'old_refresh_token'
+            # Mock Redis to return a refresh token
+            mock_redis = Mock()
+            mock_redis.get.return_value = 'old_refresh_token'
 
-                with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
-                    mock_redis_class.from_url.return_value = mock_redis
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = mock_redis
 
-                    # Mock successful token acquisition with new refresh token
-                    mock_app.acquire_token_by_refresh_token.return_value = {
-                        'access_token': 'new-access-token',
-                        'refresh_token': 'new_refresh_token',
-                        'expires_in': 3600
-                    }
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator(http_client=mock_http_client)
+                token = await authenticator.get_access_token_for_user()
 
-                    authenticator = graph_auth_module.DelegatedGraphAuthenticator()
-                    token = await authenticator.get_access_token_for_user()
+                assert token == 'new-access-token'
+                # Verify the new refresh token was stored
+                mock_redis.set.assert_called_once()
 
-                    assert token == 'new-access-token'
-                    # Verify the new refresh token was stored
-                    mock_redis.set.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_get_access_token_for_user_no_http_client(self):
+        """Test error handling when no HTTP client is provided."""
+        with patch.dict(os.environ, {
+            "CLIENT_ID": "dummy-client-id",
+            "CLIENT_SECRET": "dummy-client-secret",
+            "REDIRECT_URI": "http://localhost/callback",
+            "TARGET_EXTERNAL_USER": "dummy@example.com"
+        }):
+            importlib.reload(importlib.import_module('app.config'))
+            graph_auth_module = importlib.reload(importlib.import_module('app.auth.graph_auth'))
+            
+            with patch('app.auth.graph_auth.redis.Redis') as mock_redis_class:
+                mock_redis_class.from_url.return_value = Mock()
+                
+                authenticator = graph_auth_module.DelegatedGraphAuthenticator()  # No HTTP client
+                
+                with pytest.raises(graph_auth_module.GraphAuthError, match="HTTP client not available for async token acquisition"):
+                    await authenticator.get_access_token_for_user()

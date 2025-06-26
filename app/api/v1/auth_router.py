@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, HttpUrl
+import httpx
 
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 from app.config import settings
@@ -29,9 +30,11 @@ class AuthError(BaseModel):
     error_code: str = Field(..., description="Machine-readable error code")
 
 
-def get_auth_client() -> DelegatedGraphAuthenticator:
+async def get_auth_client() -> DelegatedGraphAuthenticator:
     """Dependency to get the auth client instance."""
-    return DelegatedGraphAuthenticator()
+    # Create a shared HTTP client for the request
+    http_client = httpx.AsyncClient()
+    return DelegatedGraphAuthenticator(http_client=http_client)
 
 
 def validate_auth_code(code: str) -> str:
@@ -73,7 +76,7 @@ async def process_auth_code(
         HTTPException: If token acquisition fails
     """
     try:
-        auth_client.acquire_token_by_auth_code(code)
+        await auth_client.acquire_token_by_auth_code(code)
         logger.info("Successfully processed authorization code")
         return AuthResponse(
             status="success",

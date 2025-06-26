@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 # Qualified Internal Imports
 from app.config import settings
@@ -40,18 +40,11 @@ def get_graph_client(request: Request) -> GraphClient:
 
 # API Endpoint Definition
 @router.get(
-    "/{user_id}",
+    "/",
     response_model=List[Email],
-    summary="Fetch recent emails for a specific user",
+    summary="Fetch recent emails for the authenticated user",
 )
-
-async def get_emails_for_user(
-    # Path & Query Parameters
-    user_id: str = Path(
-        ...,
-        description="The user principal name (e.g., user@example.com) or ID of the user.",
-        examples=["adele.vance@contoso.com"]
-    ),
+async def get_my_emails(
     top: int = Query(
         default=10,
         ge=1,
@@ -65,25 +58,23 @@ async def get_emails_for_user(
     client: GraphClient = Depends(get_graph_client),
 ):
     """
-    Retrieves a list of recent emails for a specified user, sorted from newest to oldest.
+    Retrieves a list of recent emails for the single external user who has
+    authenticated with the application via the OAuth2 flow.
     """
-    logger.info("Fetching top %d emails for user_id: %s", top, user_id)
+    logger.info("Fetching top %d emails for the authenticated user.", top)
     try:
         emails = await client.fetch_messages(
-            mailbox=user_id,
             top=top,
             since=since
         )
         return emails
 
     except GraphAPIFailedRequest as e:
-        logger.error("Graph API request failed for user %s: %s", user_id, str(e), exc_info=True)
-        # 502 Bad Gateway is appropriate for an error from an upstream service
+        logger.error("Graph API request failed: %s", str(e), exc_info=True)
         raise HTTPException(status_code=502, detail=f"Error from Microsoft Graph API: {str(e)}") from e
     except GraphClientError as e:
-        logger.error("GraphClient error for user %s: %s", user_id, str(e), exc_info=True)
+        logger.error("GraphClient error: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"Email service error: {str(e)}") from e
     except Exception as e:
-        # Catch-all for truly unexpected errors
-        logger.exception("An unexpected error occurred while fetching emails for user %s", user_id)
+        logger.exception("An unexpected error occurred while fetching emails.")
         raise HTTPException(status_code=500, detail="An unexpected internal error occurred.")

@@ -64,24 +64,23 @@ def mock_email_tasks_dependencies():
     mock_auth = MagicMock(spec=DelegatedGraphAuthenticator)
     mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
     
-    with patch('app.tasks.email_tasks._get_auth_client', return_value=mock_auth):
-        with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
-            with patch('app.tasks.email_tasks.s3_client') as mock_s3:
-                with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
-                    mock_redis = MagicMock()
-                    mock_redis_class.from_url.return_value = mock_redis
-                    mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
-                    
-                    # Create a mock HTTP client
-                    mock_http_client = AsyncMock()
-                    
-                    yield {
-                        'auth': mock_auth,
-                        'postgres': mock_postgres,
-                        's3': mock_s3,
-                        'redis': mock_redis,
-                        'http_client': mock_http_client
-                    }
+    with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
+        with patch('app.tasks.email_tasks.s3_client') as mock_s3:
+            with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
+                mock_redis = MagicMock()
+                mock_redis_class.from_url.return_value = mock_redis
+                mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
+                
+                # Create a mock HTTP client
+                mock_http_client = AsyncMock()
+                
+                yield {
+                    'auth': mock_auth,
+                    'postgres': mock_postgres,
+                    's3': mock_s3,
+                    'redis': mock_redis,
+                    'http_client': mock_http_client
+                }
 
 @pytest.fixture
 def mock_http_client():

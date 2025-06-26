@@ -37,10 +37,6 @@ def _get_redis_client():
         logger.error("Failed to connect to Redis: %s", e)
         raise RuntimeError("Failed to connect to Redis") from e
 
-def _get_auth_client() -> DelegatedGraphAuthenticator:
-    """Get the auth client instance."""
-    return DelegatedGraphAuthenticator()
-
 # Pure Business Logic Function
 def should_process_email(email: Email) -> bool:
     """
@@ -73,10 +69,6 @@ async def pull_and_process_emails_logic(
     Args:
         auth_client: Optional auth client instance for dependency injection
     """
-    # Use provided auth client or create new one
-    if auth_client is None:
-        auth_client = _get_auth_client()
-    
     try:
         # Get Redis client
         redis_client = _get_redis_client()
@@ -90,19 +82,17 @@ async def pull_and_process_emails_logic(
         else:
             logger.info("No previous timestamp found, processing all available emails")
 
-        # Get access token for delegated authentication
-        try:
-            access_token = await auth_client.get_access_token_for_user()
-        except GraphAuthError as e:
-            logger.error("Could not get access token for user. Task cannot proceed. Error: %s", e)
-            return
-
-        # Fetch emails from Graph API
+        # Fetch emails from Graph API using shared HTTP client
         async with httpx.AsyncClient() as http_client:
-            graph_client = GraphClient(http_client=http_client, auth_client=auth_client)
+            # Create auth client if not provided
+            if auth_client is None:
+                auth_client = DelegatedGraphAuthenticator(http_client=http_client)
+            
+            # Create Graph client
+            graph_client = GraphClient(http_client=http_client)
             
             try:
-                emails = await graph_client.fetch_messages(mailbox="me", since=last_seen)
+                emails = await graph_client.fetch_messages(since=last_seen)
                 logger.info("Fetched %d emails from Graph API", len(emails))
             except (GraphClientAuthenticationError, GraphAPIFailedRequest) as e:
                 logger.error("Failed to fetch emails from Graph API: %s", e)
@@ -140,7 +130,7 @@ async def pull_and_process_emails_logic(
 
                     # Download raw .eml content
                     try:
-                        eml_content = await graph_client.fetch_eml_content(message_id=email.id, mailbox="me")
+                        eml_content = await graph_client.fetch_eml_content(message_id=email.id)
                         logger.info("Downloaded .eml content for email %s (%d bytes)", email.id, len(eml_content))
                     except GraphAPIFailedRequest as e:
                         logger.error("Failed to download .eml content for email %s: %s", email.id, e)
