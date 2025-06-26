@@ -23,7 +23,6 @@ async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     It also ensures the database tables are clean before each test.
     """
     # 1. Create and initialize a new client instance.
-    # The connection string will be: postgresql://emailreader_user:emailreader_password@postgres:5432/emailreader
     client = PostgresClient()
     await client.initialize()
 
@@ -31,7 +30,6 @@ async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     await client.create_tables()
 
     # 3. Before yielding the client to the test, clean the tables.
-    # This ensures each test starts with a clean slate.
     await client.execute("TRUNCATE TABLE archived_emails RESTART IDENTITY CASCADE;")
     
     # 4. Yield the client to the test function

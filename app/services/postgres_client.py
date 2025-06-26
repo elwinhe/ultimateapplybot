@@ -208,6 +208,5 @@ class PostgresClient:
             logger.error("Failed to create tables: %s", str(e), exc_info=True)
             raise PostgresClientError("Failed to create database tables") from e
 
-
 # Singleton instance
 postgres_client = PostgresClient()
