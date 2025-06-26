@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str
 
     # Email processing settings
-    TARGET_MAILBOX: str = "inbox"
+    TARGET_MAILBOX: str
     REDIS_LAST_SEEN_EXPIRY: int = 604800  # 7 days in seconds
 
     def get_database_url(self) -> str:
