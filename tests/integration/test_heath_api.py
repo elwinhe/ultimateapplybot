@@ -60,13 +60,12 @@ def test_health_check_all_services_healthy(test_client):
     # Make a GET request to the health check endpoint
     response = test_client.get("/healthcheck")
     
-    # Verify the response status code is 200 OK
+    # Verify the response status code is OK
     assert response.status_code == 200, (
         f"Expected status code 200, but got {response.status_code}. "
         f"Response body: {response.text}"
     )
     
-    # Parse the JSON response
     health_data = response.json()
     
     # Verify the response structure and values

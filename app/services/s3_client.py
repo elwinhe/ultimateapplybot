@@ -155,7 +155,6 @@ class S3Client:
             return s3_object_key
 
         except ClientError as e:
-            # ClientError includes permission errors, bucket not found, etc.
             error_code = e.response.get("Error", {}).get("Code", "Unknown")
             logger.error(
                 "S3 ClientError while uploading %s. AWS Error Code: %s",

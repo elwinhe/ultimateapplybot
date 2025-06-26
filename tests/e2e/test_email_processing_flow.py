@@ -16,10 +16,8 @@ import boto3
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone, timedelta
 
-# Import the Celery task to be triggered
 from app.tasks.email_tasks import pull_and_process_emails, REDIS_LAST_SEEN_KEY
 
-# Import types and services needed for setup and verification
 from app.models.email import Email, EmailAddress, Body
 from app.config import settings
 from app.services.postgres_client import postgres_client
@@ -51,9 +49,6 @@ async def e2e_test_setup(mocker):
         aws_secret_access_key="test"
     )
     try:
-        # --- THE FIX ---
-        # For any region other than us-east-1, S3 requires a LocationConstraint.
-        # This makes the test robust regardless of the configured AWS_REGION.
         if settings.AWS_REGION != "us-east-1":
             s3_conn.create_bucket(
                 Bucket=settings.S3_BUCKET_NAME,
@@ -73,11 +68,9 @@ async def e2e_test_setup(mocker):
     # Yield the mocked graph client so tests can configure its return values
     yield mock_graph_client_instance
 
-    # Teardown
     await postgres_client.close()
 
 
-#  End-to-End Test Case
 @pytest.mark.asyncio
 async def test_full_email_processing_flow(e2e_test_setup):
     """
@@ -213,7 +206,6 @@ async def test_no_emails_match_filtering_criteria(e2e_test_setup):
         assert record is None, f"Unexpected database record found for email {email.id}"
     
     # 4. Verify the high-water mark was updated to the newest email timestamp
-    # (even though no emails were processed, we should move past them)
     redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
     new_timestamp = redis_client.get(REDIS_LAST_SEEN_KEY)
     assert new_timestamp is not None, "High-water mark should be updated even for filtered emails"

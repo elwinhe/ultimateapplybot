@@ -12,11 +12,10 @@ from typing import AsyncGenerator, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 
-# --- Qualified Internal Imports ---
+# Qualified Internal Imports
 from app.config import settings
 from app.models.email import Email
-from app.services.graph_client import (GraphAPIFailedRequest, GraphClient,
-                                     GraphClientError)
+from app.services.graph_client import (GraphAPIFailedRequest, GraphClient, GraphClientError)
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,6 @@ router = APIRouter(
     prefix="/emails",
     tags=["Emails"],
 )
-
 
 # Dependency Injection
 def get_graph_client(request: Request) -> GraphClient:
@@ -42,8 +40,7 @@ def get_graph_client(request: Request) -> GraphClient:
         logger.critical("httpx.AsyncClient not found in app state. Is the lifespan manager configured?")
         raise HTTPException(status_code=500, detail="Server is not configured correctly.")
 
-
-# --- API Endpoint Definition ---
+# API Endpoint Definition
 @router.get(
     "/{user_id}",
     response_model=List[Email],
@@ -67,7 +64,6 @@ async def get_emails_for_user(
         default=None,
         description="Fetch emails received after this ISO 8601 timestamp.",
     ),
-    # Dependency Injection
     client: GraphClient = Depends(get_graph_client),
 ):
     """
@@ -81,7 +77,7 @@ async def get_emails_for_user(
             since=since
         )
         return emails
-    # --- Specific Exception Handling ---
+
     except GraphAPIFailedRequest as e:
         logger.error("Graph API request failed for user %s: %s", user_id, str(e), exc_info=True)
         # 502 Bad Gateway is appropriate for an error from an upstream service

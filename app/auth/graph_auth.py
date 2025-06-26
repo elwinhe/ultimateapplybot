@@ -15,7 +15,6 @@ class GraphAuthError(Exception):
     """Raised when authentication fails."""
     pass
 
-# A class based approach is more maintainable and efficient
 class GraphAuthenticator:
     """
     Handles authentication with Microsoft Graph API.
@@ -70,5 +69,4 @@ class GraphAuthenticator:
         return result["access_token"]
 
 # Create a single instance that can be imported and used throughout the application.
-# This ensures the authenticator is initialized only once.
 graph_authenticator = GraphAuthenticator()

@@ -22,7 +22,6 @@ from app.services.postgres_client import postgres_client, PostgresClientError
 
 logger = logging.getLogger(__name__)
 
-# Redis Client Initialization
 # Connect to Redis using the validated URL from settings.
 try:
     redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
@@ -137,7 +136,7 @@ async def pull_and_process_emails() -> None:
             newest_email_timestamp = max(email.received_date_time for email in new_emails)
             redis_client.setex(
                 REDIS_LAST_SEEN_KEY, 
-                settings.REDIS_LAST_SEEN_EXPIRY,
+                settings.REDIS_LAST_SEEN_EXPIRY, #TTL expires in 7 days
                 newest_email_timestamp.isoformat()
             )
             logger.info("Updated last-seen timestamp to: %s (expires in 7 days)", newest_email_timestamp.isoformat())

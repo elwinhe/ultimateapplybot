@@ -14,7 +14,6 @@ import httpx
 from app.auth.graph_auth import graph_authenticator, GraphAuthError
 from app.models.email import Email
 
-# Logger setup is a standard for every module
 logger = logging.getLogger(__name__)
 
 # Define specific errors for this module's domain
