@@ -103,6 +103,16 @@ async def pull_and_process_emails() -> None:
                 if should_process_email(email):
                     logger.info("Processing email ID: %s, Subject: '%s'", email.id, email.subject)
 
+                    # Check if email has already been processed (idempotency check)
+                    existing_record = await postgres_client.fetch_one(
+                        "SELECT message_id FROM archived_emails WHERE message_id = $1", 
+                        email.id
+                    )
+                    
+                    if existing_record:
+                        logger.info("Email ID %s already processed, skipping", email.id)
+                        continue
+
                     eml_content = await graph_client.fetch_eml_content(
                         message_id=email.id, mailbox=settings.TARGET_MAILBOX
                     )
@@ -123,7 +133,8 @@ async def pull_and_process_emails() -> None:
             logger.info("Finished processing. Archived %d out of %d emails.", processed_count, len(new_emails))
 
             # 8. Update the high-water mark in Redis
-            newest_email_timestamp = new_emails[0].received_date_time
+            # Find the newest email timestamp (emails are ordered by receivedDateTime desc from Graph API)
+            newest_email_timestamp = max(email.received_date_time for email in new_emails)
             redis_client.setex(
                 REDIS_LAST_SEEN_KEY, 
                 settings.REDIS_LAST_SEEN_EXPIRY,
