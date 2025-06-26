@@ -108,7 +108,7 @@ async def pull_and_process_emails() -> None:
                     )
 
                     filename = f"{email.id}.eml"
-                    s3_key = await s3_client.upload_eml_file(filename=filename, content=eml_content)
+                    s3_key = s3_client.upload_eml_file(filename=filename, content=eml_content)
 
                     # 7. Log metadata to Postgres.
                     # The ON CONFLICT clause provides idempotency at the database level.

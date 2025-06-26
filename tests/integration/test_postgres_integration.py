@@ -15,7 +15,6 @@ from collections.abc import AsyncGenerator
 # Import the client to be tested
 from app.services.postgres_client import PostgresClient
 
-# --- Fixture to Provide an Initialized Client and Ensure a Clean Database ---
 
 @pytest_asyncio.fixture
 async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
@@ -24,7 +23,6 @@ async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     It also ensures the database tables are clean before each test.
     """
     # 1. Create and initialize a new client instance.
-    # Use the local PostgreSQL container from docker-compose.yml
     # The connection string will be: postgresql://emailreader_user:emailreader_password@postgres:5432/emailreader
     client = PostgresClient()
     await client.initialize()
@@ -43,8 +41,7 @@ async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     await client.close()
 
 
-# --- Integration Test Cases ---
-
+# Integration Test Cases
 @pytest.mark.asyncio
 async def test_create_and_fetch_archived_email(live_postgres_client: PostgresClient):
     """

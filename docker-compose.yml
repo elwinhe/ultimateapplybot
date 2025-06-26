@@ -10,7 +10,6 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      # Using the standard PING command for the healthcheck.
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
       timeout: 3s
@@ -21,7 +20,6 @@ services:
     container_name: emailreader_postgres
     restart: unless-stopped
     environment:
-      # These values are loaded from the .env file
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
@@ -29,17 +27,22 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # This more explicit check ensures the service is ready for connections.
       test: ["CMD-SHELL", "pg_isready -h postgres -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 15s
       timeout: 5s
       retries: 5
-    # ADDED: Production-ready logging configuration
     logging:
       driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
+
+  moto:
+    image: motoserver/moto:latest
+    container_name: emailreader_moto
+    ports:
+      - "5001:5000"
+    command: -H 0.0.0.0 # Listen on all interfaces
   
   beat:
     build:
@@ -50,7 +53,6 @@ services:
     restart: unless-stopped
     command: >
       celery -A app.celery_app.celery beat --loglevel=info
-    # All configuration is loaded from the .env file.
     env_file: .env
     volumes:
       - ./app:/app/app
@@ -66,7 +68,6 @@ services:
       target: api-runtime
     container_name: emailreader_api
     restart: unless-stopped
-    # The .env file is the single source of truth for all environment variables.
     env_file: .env
     ports: ["8000:8000"]
     volumes:
@@ -114,6 +115,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      moto:
+        condition: service_started
     user: root
 
 volumes:

@@ -40,24 +40,36 @@ class S3Client:
     high-level methods for file operations like uploading.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, endpoint_url: str | None = None) -> None:
         """
         Initializes the boto3 S3 client and validates credentials/bucket access.
+        
+        Args:
+            endpoint_url: Optional endpoint URL for testing (e.g., moto mock service)
         
         Raises:
             S3ValidationError: If credentials are invalid or bucket is inaccessible.
         """
         try:
-            self._s3_client: BaseClient = boto3.client(
-                "s3",
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                region_name=settings.AWS_REGION,
-            )
+            client_kwargs = {
+                "aws_access_key_id": settings.AWS_ACCESS_KEY_ID,
+                "aws_secret_access_key": settings.AWS_SECRET_ACCESS_KEY,
+                "region_name": settings.AWS_REGION,
+            }
+            
+            # Add endpoint URL for testing (moto mock service)
+            if endpoint_url:
+                client_kwargs["endpoint_url"] = endpoint_url
+                # Use dummy credentials for mock service
+                client_kwargs["aws_access_key_id"] = "test"
+                client_kwargs["aws_secret_access_key"] = "test"
+            
+            self._s3_client: BaseClient = boto3.client("s3", **client_kwargs)
             logger.info("S3 client initialized successfully")
             
-            # Validate credentials and bucket access at startup
-            self._validate_s3_access()
+            # Only validate bucket access if not using a mock endpoint
+            if not endpoint_url:
+                self._validate_s3_access()
             
         except (BotoCoreError, ClientError) as e:
             logger.critical("Failed to initialize S3 client: %s", str(e), exc_info=True)
@@ -163,4 +175,4 @@ class S3Client:
 
 
 # Singleton instance
-s3_client = S3Client()
+s3_client = S3Client(endpoint_url=getattr(settings, 'S3_ENDPOINT_URL', None))
