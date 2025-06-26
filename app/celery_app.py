@@ -7,6 +7,7 @@ This module initializes the Celery instance, Celery Beat schedule for
 periodic jobs.
 """
 from __future__ import annotations
+import os
 
 from celery import Celery
 from kombu import Queue
@@ -36,6 +37,10 @@ celery.conf.update(
     worker_max_memory_per_child=1_000_000,   # ~1 GB
     # worker_concurrency left unset → defaults to CPU-count
 
+    # Celery Beat Configuration - Use writable directory
+    beat_schedule_filename='/tmp/celerybeat-schedule',
+    beat_scheduler='celery.beat.PersistentScheduler',
+    
     # Periodic Task Schedule (Celery Beat
     beat_schedule={
         'pull-new-emails-every-15-minutes': {

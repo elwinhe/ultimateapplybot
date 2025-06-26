@@ -4,9 +4,8 @@ __pycache__/
 *.pyd
 *.sqlite3
 *.log
-*.env
+.env*
 .venv/
 .git/
-tests/
 outlook-email-looker/node_modules
 outlook-email-looker/dist

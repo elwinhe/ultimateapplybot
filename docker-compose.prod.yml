@@ -1,0 +1,22 @@
+# docker-compose.prod.yml - Production override for RDS testing
+version: "3.8"
+
+services:
+  # Remove local postgres service - use RDS instead
+  postgres:
+    profiles: ["local-only"]
+    
+  # Override environment for production
+  api:
+    env_file: .env.production
+    
+  worker:
+    env_file: .env.production
+    
+  beat:
+    env_file: .env.production
+    
+  test-runner:
+    env_file: .env.production
+    # Remove dependency on local postgres
+    depends_on: [] 
