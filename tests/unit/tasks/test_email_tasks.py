@@ -1,5 +1,5 @@
 """
-tests/tasks/test_email_tasks.py
+tests/unit/tasks/test_email_tasks.py
 
 Unit tests for the core Celery task orchestrator.
 
@@ -64,8 +64,7 @@ def mock_email_no_match() -> Email:
     )
 
 
-# --- Tests for the Pure Filtering Logic ---
-
+# Tests for the Pure Filtering Logic
 def test_should_process_email_matches_on_invoice(mock_email_with_invoice):
     """Tests that an email with 'invoice' in the subject is selected."""
     assert should_process_email(mock_email_with_invoice) is True
@@ -79,8 +78,7 @@ def test_should_process_email_rejects_non_matching(mock_email_no_match):
     assert should_process_email(mock_email_no_match) is False
 
 
-# --- Tests for the Main Celery Task Orchestrator ---
-
+# Tests for the Main Celery Task Orchestrator
 @pytest.mark.asyncio
 async def test_pull_and_process_emails_happy_path(mock_email_with_invoice, mock_email_no_match, mock_email_tasks_dependencies):
     """Tests the full, successful workflow of fetching, filtering, and archiving an email."""

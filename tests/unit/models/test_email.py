@@ -1,4 +1,4 @@
-# tests/models/test_email.py
+# tests/unit/models/test_email.py
 
 import pytest
 from copy import deepcopy

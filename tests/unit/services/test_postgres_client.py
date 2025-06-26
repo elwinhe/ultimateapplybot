@@ -1,5 +1,5 @@
 """
-tests/services/test_postgres_client.py
+tests/unit/services/test_postgres_client.py
 
 Unit tests for the PostgresClient service.
 

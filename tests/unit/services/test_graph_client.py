@@ -1,5 +1,5 @@
 """
-tests/services/test_graph_client.py
+tests/unit/services/test_graph_client.py
 
 Unit tests for the GraphClient service layer.
 

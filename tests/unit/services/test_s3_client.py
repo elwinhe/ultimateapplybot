@@ -1,6 +1,8 @@
 """
-WARNING: These async S3 tests use a real S3 bucket and require valid AWS credentials and a test bucket.
-Do NOT use a production bucket for testing. Clean up test objects after running tests.
+tests/unit/services/test_s3_client.py
+
+WARNING: These async S3 tests use a real S3 bucket and require 
+valid AWS credentials and a test bucket.
 """
 from __future__ import annotations
 

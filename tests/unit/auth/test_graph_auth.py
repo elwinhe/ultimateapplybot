@@ -1,18 +1,22 @@
-# tests/auth/test_graph_auth.py
+"""
+tests/unit/auth/test_graph_auth.py
+
+Unit tests for the DelegatedGraphAuthenticator class.
+
+These tests are designed to test the DelegatedGraphAuthenticator class
+in isolation, without relying on external services or the application's
+main functionality.
+"""
 
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
-from datetime import datetime, timezone
 import importlib
 import os
 import httpx
 
 from app.auth.graph_auth import (
-    DelegatedGraphAuthenticator, 
-    GraphAuthError, 
-    GraphAuthValidationError, 
-    GraphAuthTokenError
-)
+    DelegatedGraphAuthenticator
+    )
 from app.config import settings
 
 
