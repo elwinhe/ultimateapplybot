@@ -41,7 +41,6 @@ async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     await client.close()
 
 
-# Integration Test Cases
 @pytest.mark.asyncio
 async def test_create_and_fetch_archived_email(live_postgres_client: PostgresClient):
     """
