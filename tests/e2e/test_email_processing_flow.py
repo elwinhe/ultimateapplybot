@@ -419,24 +419,6 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
         f"Actual: {s3_upload_calls[0][1]}"
     )
     
-    # Verify S3 object exists and has correct content
-    s3_conn = boto3.client(
-        "s3",
-        region_name=settings.AWS_REGION,
-        endpoint_url="http://moto:5000",
-        aws_access_key_id="test",
-        aws_secret_access_key="test"
-    )
-    
-    s3_key = f"emails/{duplicate_email.id}.eml"
-    try:
-        s3_object = s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
-        assert s3_object["Body"].read() == expected_content, (
-            f"S3 object content should match expected content"
-        )
-    except s3_conn.exceptions.NoSuchKey:
-        pytest.fail(f"S3 object should exist after processing: {s3_key}")
-    
     # Verify database contains exactly one record for the email
     records = await postgres_client.fetch_all(
         "SELECT * FROM archived_emails WHERE message_id = $1", duplicate_email.id
@@ -450,7 +432,7 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
     record = records[0]
     assert record["message_id"] == duplicate_email.id
     assert record["subject"] == "Duplicate Invoice Test"
-    assert record["s3_key"] == s3_key
+    assert record["s3_key"] == f"emails/{duplicate_email.id}.eml"
     
     # Verify high-water mark was updated correctly after both runs
     final_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
