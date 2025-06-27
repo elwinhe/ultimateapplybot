@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     Centralized configuration for the application.
     Loads settings from a .env file.
     """
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8')
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
     # Redis/Celery
     REDIS_URL: str
