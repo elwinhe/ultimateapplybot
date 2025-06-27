@@ -23,6 +23,12 @@ The application is designed with a clean separation of concerns, dividing logic 
     -   `dispatch_email_processing`: The main scheduled task. It queries the database for all authenticated users and dispatches a separate worker task for each one.
     -   `process_single_mailbox`: The worker task. It receives a `user_id`, fetches and filters emails for that user, uploads the `.eml` files to S3, logs metadata to PostgreSQL, and updates a high-water mark in Redis.
 
+### Design Choices
+- **Persistent Authentication**: OAuth2 refresh tokens are stored in the database, allowing the application to maintain long-term access without requiring repeated user logins.
+- **Concurrent Processing**: Background jobs are designed with a "fan-out" pattern, allowing multiple emails from different users to be processed in parallel for high throughput.
+- **Idempotent Processing**: Redis is used as a cache to store the timestamp of the last processed email, preventing the system from fetching and processing the same emails multiple times.
+- **Periodic Scheduling**: A Celery Beat task runs on a configurable schedule (e.g., every 15 minutes) to automatically trigger the email processing workflow.
+
 ## Getting Started (Local Development)
 
 This setup runs all services locally using Docker containers, including a mock S3 service (`moto`) for safe testing.

@@ -88,7 +88,7 @@ async def test_dispatcher_schedules_tasks_for_authenticated_users(e2e_test_setup
         # Act: Run the dispatcher logic
         await dispatch_email_processing_logic()
 
-        # Assert: Verify that the dispatcher created two tasks
+        # Verify that the dispatcher created two tasks
         assert mock_delay.call_count == 2
         mock_delay.assert_any_call(user_id="user1@example.com")
         mock_delay.assert_any_call(user_id="user2@example.com")
@@ -136,7 +136,6 @@ async def test_process_single_mailbox_s3_failure_handling(e2e_test_setup, mocker
     """
     Tests that if S3 upload fails for a user, the high-water mark is not updated.
     """
-    # Arrange
     user_id = "failing-user@example.com"
     mock_email = Email(
         id="fail-email-id-002", subject="Invoice that will fail", received_date_time=datetime.now(timezone.utc),
