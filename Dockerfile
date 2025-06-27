@@ -33,8 +33,8 @@ FROM python-dependencies AS api-runtime
 # Copy the application code from the current directory into the container
 COPY ./app ./app
 
-# Create a non-root user and switch to it for better security
-RUN adduser --disabled-password --gecos "" app
+# Create a non-root user, change ownership for the app directory, and then switch to the user
+RUN adduser --disabled-password --gecos "" app && chown -R app:app /app
 USER app
 
 EXPOSE 8000

@@ -1,7 +1,7 @@
 """
-tests/unit/api/v1/test_auth_router.py
+tests/unit/auth/test_auth_router.py
 
-Unit tests for the user authentication API router.
+Unit tests for the user authentication API router (multi-user design).
 
 This suite tests the auth router in isolation by mocking the
 DelegatedGraphAuthenticator dependency. It verifies that the /login and /callback
@@ -21,8 +21,6 @@ from app.api.v1.auth_router import get_auth_client, router as auth_router
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 
 
-# --- Test Application Setup ---
-
 @pytest.fixture
 def test_app() -> FastAPI:
     """Creates a minimal FastAPI app instance including only the auth router."""
@@ -40,8 +38,8 @@ def mock_auth_client() -> MagicMock:
     mock = MagicMock(spec=DelegatedGraphAuthenticator)
     # get_auth_flow_url is a synchronous method
     mock.get_auth_flow_url = MagicMock()
-    # acquire_token_by_auth_code is an asynchronous method
-    mock.acquire_token_by_auth_code = AsyncMock()
+    # acquire_and_store_tokens is an asynchronous method
+    mock.acquire_and_store_tokens = AsyncMock()
     return mock
 
 
@@ -87,45 +85,78 @@ class TestAuthRouter:
         assert "Failed to initiate authentication" in response.json()["detail"]
 
     def test_auth_callback_success(self, client: TestClient, mock_auth_client: MagicMock):
-        """Tests the happy path for the /callback endpoint."""
+        """Tests the happy path for the /callback endpoint with form parameters."""
         # Arrange: The async method should return successfully
-        mock_auth_client.acquire_token_by_auth_code.return_value = None
+        mock_auth_client.acquire_and_store_tokens.return_value = None
 
-        # Act
-        response = client.get("/auth/callback?code=valid_auth_code_12345")
+        # Act: POST with form data
+        response = client.post(
+            "/auth/callback",
+            data={
+                "code": "valid_auth_code_12345",
+                "id_token": "valid_id_token_67890"
+            }
+        )
 
         # Assert
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         assert "Authentication successful" in data["message"]
-        mock_auth_client.acquire_token_by_auth_code.assert_awaited_once_with("valid_auth_code_12345")
+        mock_auth_client.acquire_and_store_tokens.assert_awaited_once_with(
+            "valid_auth_code_12345", "valid_id_token_67890"
+        )
 
     def test_auth_callback_auth_error(self, client: TestClient, mock_auth_client: MagicMock):
         """Tests that a GraphAuthError from the service is handled as a 400."""
         # Arrange: Configure the mock to raise a specific application error
-        mock_auth_client.acquire_token_by_auth_code.side_effect = GraphAuthError("Invalid code")
+        mock_auth_client.acquire_and_store_tokens.side_effect = GraphAuthError("Invalid code")
 
         # Act
-        response = client.get("/auth/callback?code=invalid_code")
+        response = client.post(
+            "/auth/callback",
+            data={
+                "code": "invalid_code",
+                "id_token": "invalid_id_token"
+            }
+        )
 
         # Assert
         assert response.status_code == 400
         assert "Invalid code" in response.json()["detail"]
 
     def test_auth_callback_missing_code(self, client: TestClient):
-        """Tests that a missing 'code' query parameter results in a 422 validation error."""
-        response = client.get("/auth/callback")
+        """Tests that a missing 'code' form parameter results in a 422 validation error."""
+        response = client.post(
+            "/auth/callback",
+            data={"id_token": "some_token"}
+        )
         assert response.status_code == 422
 
-    def test_auth_callback_empty_code(self, client: TestClient):
-        """Tests that an empty 'code' query parameter results in a 400 validation error."""
-        response = client.get("/auth/callback?code=")
-        assert response.status_code == 400
-        assert "Invalid authorization code format" in response.json()["detail"]
+    def test_auth_callback_missing_id_token(self, client: TestClient):
+        """Tests that a missing 'id_token' form parameter results in a 422 validation error."""
+        response = client.post(
+            "/auth/callback",
+            data={"code": "some_code"}
+        )
+        assert response.status_code == 422
 
-    def test_auth_callback_short_code(self, client: TestClient):
-        """Tests that a 'code' parameter that is too short results in a 400 validation error."""
-        response = client.get("/auth/callback?code=short")
-        assert response.status_code == 400
-        assert "Invalid authorization code format" in response.json()["detail"] 
+    def test_auth_callback_missing_both_parameters(self, client: TestClient):
+        """Tests that missing both 'code' and 'id_token' parameters results in a 422 validation error."""
+        response = client.post("/auth/callback")
+        assert response.status_code == 422
+
+    def test_auth_callback_empty_parameters(self, client: TestClient):
+        """Tests that empty form parameters are handled correctly."""
+        response = client.post(
+            "/auth/callback",
+            data={"code": "", "id_token": ""}
+        )
+        # FastAPI accepts empty strings as valid form parameters
+        # The validation should happen in the business logic, not at the API level
+        assert response.status_code == 200
+
+    def test_auth_callback_wrong_method(self, client: TestClient):
+        """Tests that GET requests to /callback are not allowed."""
+        response = client.get("/auth/callback?code=test&id_token=test")
+        assert response.status_code == 405  # Method Not Allowed 

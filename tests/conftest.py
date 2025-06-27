@@ -2,6 +2,7 @@
 tests/conftest.py
 
 Shared test fixtures and configuration for the EmailReader test suite.
+Updated for multi-user architecture.
 """
 import pytest
 import redis
@@ -9,13 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
 from app.config import settings
-from app.auth.graph_auth import DelegatedGraphAuthenticator
 from app.services.graph_client import GraphClient
 from app.services.postgres_client import postgres_client
 from app.services.s3_client import s3_client
-
-# Redis key for storing refresh tokens
-REFRESH_TOKEN_KEY = f"user_refresh_token:{settings.TARGET_EXTERNAL_USER}"
 
 @pytest.fixture(scope="session")
 def test_redis_client():
@@ -29,58 +26,95 @@ def test_redis_client():
         return None
 
 @pytest.fixture(autouse=True)
-def setup_test_authentication(test_redis_client):
+def setup_test_database():
     """
-    Automatically sets up test authentication for all tests.
-    This ensures tests have a valid refresh token available.
+    Automatically sets up test database state for all tests.
+    This ensures tests have clean, predictable data.
     """
-    if test_redis_client is not None:
-        # Store a test refresh token in Redis
-        test_refresh_token = "test_refresh_token_for_testing"
-        test_redis_client.set(REFRESH_TOKEN_KEY, test_refresh_token)
-        
-        yield
-        
-        # Clean up after test
-        test_redis_client.delete(REFRESH_TOKEN_KEY)
-    else:
-        # Skip Redis setup if not available
-        yield
+    # This fixture can be used to set up test users in PostgreSQL
+    # For now, it's a placeholder that can be extended as needed
+    yield
 
 @pytest.fixture
-def mock_delegated_auth():
+def mock_graph_client():
     """
-    Mocks the delegated auth client to return a valid access token.
+    Provides a mocked GraphClient for testing.
     """
-    mock_auth = MagicMock(spec=DelegatedGraphAuthenticator)
-    mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
-    yield mock_auth
+    mock_client = AsyncMock(spec=GraphClient)
+    mock_client.fetch_messages = AsyncMock(return_value=[])
+    mock_client.fetch_eml_content = AsyncMock(return_value=b"test email content")
+    return mock_client
+
+@pytest.fixture
+def mock_postgres_client():
+    """
+    Provides a mocked PostgreSQL client for testing.
+    """
+    mock_client = AsyncMock()
+    mock_client.execute = AsyncMock()
+    mock_client.fetch_all = AsyncMock(return_value=[])
+    mock_client.fetch_one = AsyncMock(return_value=None)
+    return mock_client
+
+@pytest.fixture
+def mock_s3_client():
+    """
+    Provides a mocked S3 client for testing.
+    """
+    mock_client = AsyncMock()
+    mock_client.upload_eml_file = AsyncMock(return_value="test/s3/key.eml")
+    return mock_client
+
+@pytest.fixture
+def mock_redis_client():
+    """
+    Provides a mocked Redis client for testing.
+    """
+    mock_client = MagicMock()
+    mock_client.get = MagicMock(return_value=None)
+    mock_client.setex = MagicMock()
+    mock_client.delete = MagicMock()
+    return mock_client
+
+@pytest.fixture
+def sample_users():
+    """
+    Provides a list of sample user IDs for multi-user testing.
+    """
+    return [
+        "user1@example.com",
+        "user2@example.com", 
+        "user3@example.com"
+    ]
+
+@pytest.fixture
+def sample_auth_tokens(sample_users):
+    """
+    Provides sample auth token records for multi-user testing.
+    """
+    return [
+        {"user_id": user_id, "encrypted_refresh_token": f"token_for_{user_id}"}
+        for user_id in sample_users
+    ]
 
 @pytest.fixture
 def mock_email_tasks_dependencies():
     """
-    Provides mocked dependencies for email task tests.
+    Provides mocked dependencies for email task tests in multi-user architecture.
     """
-    mock_auth = MagicMock(spec=DelegatedGraphAuthenticator)
-    mock_auth.get_access_token_for_user = AsyncMock(return_value="test_access_token")
-    
     with patch('app.tasks.email_tasks.postgres_client') as mock_postgres:
         with patch('app.tasks.email_tasks.s3_client') as mock_s3:
-            with patch('app.tasks.email_tasks.redis.Redis') as mock_redis_class:
-                mock_redis = MagicMock()
-                mock_redis_class.from_url.return_value = mock_redis
-                mock_redis.get.return_value = datetime.now(timezone.utc).isoformat()
-                
-                # Create a mock HTTP client
-                mock_http_client = AsyncMock()
-                
-                yield {
-                    'auth': mock_auth,
-                    'postgres': mock_postgres,
-                    's3': mock_s3,
-                    'redis': mock_redis,
-                    'http_client': mock_http_client
-                }
+            with patch('app.tasks.email_tasks.redis_client') as mock_redis:
+                with patch('app.tasks.email_tasks.GraphClient') as mock_graph_class:
+                    mock_graph = AsyncMock()
+                    mock_graph_class.return_value = mock_graph
+                    
+                    yield {
+                        'postgres': mock_postgres,
+                        's3': mock_s3,
+                        'redis': mock_redis,
+                        'graph': mock_graph
+                    }
 
 @pytest.fixture
 def mock_http_client():
@@ -128,3 +162,14 @@ def mock_email_no_match():
         has_attachments=False,
         attachments=None
     )
+
+@pytest.fixture(autouse=True)
+def mock_postgres_in_decorator():
+    """
+    Auto-used fixture that mocks the postgres_client specifically where it's
+    imported by the decorator module. This prevents the decorator from
+    running real database logic during both unit and E2E tests, allowing
+    test-specific fixtures to manage the database lifecycle instead.
+    """
+    with patch("app.tasks.decorators.postgres_client", new_callable=AsyncMock) as mock_pg:
+        yield mock_pg

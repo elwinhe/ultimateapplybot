@@ -20,7 +20,9 @@ dependencies = [
     "python-dateutil",
     "email-validator",
     "asyncpg",
-    "eventlet"
+    "eventlet",
+    "python-jose[cryptography]",
+    "python-multipart"
 ]
 
 [project.optional-dependencies]

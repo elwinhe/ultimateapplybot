@@ -1,4 +1,3 @@
-# docker-compose.yml (Final Version)
 version: "3.8"
 
 services:
@@ -20,17 +19,18 @@ services:
     container_name: emailreader_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: emailreader
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: emailreader_db
     ports: ["5432:5432"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h postgres -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 15s
+      test: ["CMD-SHELL", "pg_isready -U emailreader -d emailreader_db"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
     logging:
       driver: "json-file"
       options:
@@ -41,9 +41,9 @@ services:
     image: motoserver/moto:latest
     container_name: emailreader_moto
     ports:
-      - "5001:5000"
+      - "5002:5000"
     command: -H 0.0.0.0 # Listen on all interfaces
-  
+
   beat:
     build:
       context: .
@@ -52,11 +52,10 @@ services:
     container_name: emailreader_beat
     restart: unless-stopped
     command: >
-      celery -A app.celery_app.celery beat --loglevel=info
+      celery -A app.celery_app.celery beat --loglevel=info --schedule=/app/celerybeat-schedule
     env_file: .env
     volumes:
       - ./app:/app/app
-      - celery_beat_data:/tmp
     depends_on:
       redis:
         condition: service_healthy
@@ -91,7 +90,7 @@ services:
     container_name: emailreader_worker
     restart: unless-stopped
     command: >
-      celery -A app.celery_app.celery worker --loglevel=info -c 4
+      celery -A app.celery_app.celery worker --loglevel=info --pool=prefork -c 4
     env_file: .env
     volumes:
       - ./app:/app/app
@@ -101,7 +100,7 @@ services:
       postgres:
         condition: service_healthy
 
-  # Test Runner Service (Simplified)
+  # --- Test Runner Service (Updated) ---
   test-runner:
     build:
       context: .
@@ -119,9 +118,9 @@ services:
         condition: service_healthy
       moto:
         condition: service_started
+    # Run as root to solve pytest cache permission issues
     user: root
 
 volumes:
   redis_data:
   postgres_data:
-  celery_beat_data:

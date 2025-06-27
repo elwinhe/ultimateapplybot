@@ -1,27 +1,25 @@
 """
 app/tasks/email_tasks.py
 
-Defines the core Celery background task for fetching, filtering,
-and archiving emails.
+Defines Celery tasks for fetching emails from multiple user accounts
+using a fan-out pattern.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Optional
 
 import httpx
 import redis
 
-# Qualified Internal Imports 
 from app.celery_app import celery
 from app.config import settings
 from app.models.email import Email
 from app.services.graph_client import GraphClient, GraphClientError
 from app.services.s3_client import s3_client, S3UploadError
-# CORRECTED: Import the correct base exception name
 from app.services.postgres_client import postgres_client, PostgresClientError
+from app.tasks.decorators import manage_postgres_connection
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +32,8 @@ except redis.exceptions.ConnectionError as e:
     logger.critical("Could not connect to Redis. The application cannot function.", exc_info=True)
     raise RuntimeError("Failed to connect to Redis") from e
 
-REDIS_LAST_SEEN_KEY = "email_processor:last_seen_timestamp"
-
-
-# Pure Business Logic Function 
 def should_process_email(email: Email) -> bool:
-    """
-    Determines if an email should be processed based on filtering criteria.
-    This pure function is easily unit-testable.
-    """
+    """Determines if an email should be processed based on filtering criteria."""
     subject_lower = email.subject.lower()
     if "invoice" in subject_lower or "receipt" in subject_lower:
         return True
@@ -50,86 +41,102 @@ def should_process_email(email: Email) -> bool:
         return True
     return False
 
-
-# Asynchronous Core Logic 
-async def pull_and_process_emails_logic() -> None:
+# Asynchronous Core Logic for a Single User 
+@manage_postgres_connection
+async def process_single_mailbox_logic(user_id: str):
     """
-    Contains the core asynchronous business logic for the email processing workflow.
+    Contains the core async logic for fetching and processing emails for one user.
     """
-    logger.info("Starting async email processing logic.")
+    logger.info("Starting email processing logic for user: %s", user_id)
+    redis_key = f"email_processor:last_seen_timestamp:{user_id}"
     
-    last_seen_iso = redis_client.get(REDIS_LAST_SEEN_KEY)
-    since: Optional[datetime] = datetime.fromisoformat(last_seen_iso) if last_seen_iso else None
-    if since:
-        logger.info("Found last-seen timestamp: %s", last_seen_iso)
-    else:
-        logger.info("No last-seen timestamp found. Will fetch most recent emails.")
+    last_seen_iso = redis_client.get(redis_key)
+    since = datetime.fromisoformat(last_seen_iso) if last_seen_iso else None
 
     async with httpx.AsyncClient(timeout=60.0) as http_client:
+        # The GraphClient now correctly handles auth internally
         graph_client = GraphClient(http_client=http_client)
-        
-        # The GraphClient will automatically use the correct endpoint (/me or /users/{...})
-        # based on the application's configuration.
-        new_emails: List[Email] = await graph_client.fetch_messages(
-            since=since, top=100
-        )
+        new_emails = await graph_client.fetch_messages(user_id=user_id, since=since, top=100)
 
         if not new_emails:
-            logger.info("No new emails found since last run.")
+            logger.info("No new emails found for user %s", user_id)
             return
 
-        logger.info("Fetched %d new emails. Filtering and processing...", len(new_emails))
+        batch_had_errors = False
         processed_count = 0
-        batch_had_errors = False # Flag to track if any email in the batch fails
-
+        
         for email in new_emails:
             if not should_process_email(email):
                 continue
-
             try:
-                logger.info("Processing email ID: %s, Subject: '%s'", email.id, email.subject)
-                eml_content = await graph_client.fetch_eml_content(
-                    message_id=email.id
-                )
+                eml_content = await graph_client.fetch_eml_content(user_id=user_id, message_id=email.id)
                 filename = f"{email.id}.eml"
                 s3_key = await s3_client.upload_eml_file(filename=filename, content=eml_content)
-                insert_query = """
-                    INSERT INTO archived_emails (message_id, subject, s3_key, archived_at)
-                    VALUES ($1, $2, $3, NOW())
-                    ON CONFLICT (message_id) DO NOTHING;
-                """
-                await postgres_client.execute(insert_query, email.id, email.subject, s3_key)
+                await postgres_client.execute(
+                    "INSERT INTO archived_emails (message_id, subject, s3_key) VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING;",
+                    email.id, email.subject, s3_key
+                )
                 processed_count += 1
-            # CORRECTED: Catch the correct base exception name
+                logger.info("Successfully processed email %s for user %s", email.id, user_id)
             except (GraphClientError, S3UploadError, PostgresClientError) as e:
-                logger.error("Failed to process email %s: %s", email.id, e, exc_info=True)
-                batch_had_errors = True # Set the flag on failure
+                logger.error("Failed to process email %s for user %s: %s", email.id, user_id, e, exc_info=True)
+                batch_had_errors = True
                 continue
-
-        logger.info("Finished processing batch. Archived %d out of %d emails.", processed_count, len(new_emails))
-
+        
+        logger.info("Processed %d emails for user %s", processed_count, user_id)
+        
         if not batch_had_errors:
-            newest_email_timestamp = new_emails[0].received_date_time
-            redis_client.setex(
-                REDIS_LAST_SEEN_KEY,
-                settings.REDIS_LAST_SEEN_EXPIRY,
-                newest_email_timestamp.isoformat()
-            )
-            logger.info("Updated last-seen timestamp to: %s", newest_email_timestamp.isoformat())
+            newest_timestamp = new_emails[0].received_date_time.isoformat()
+            redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp)
+            logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp)
         else:
-            logger.warning("Batch processing had errors. High-water mark will NOT be updated to ensure retry.")
+            logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
 
-
-# Synchronous Celery Task Wrapper 
-@celery.task(name="email_tasks.pull_and_process_emails", bind=True, max_retries=3)
-def pull_and_process_emails(self) -> None:
+# Synchronous Celery Worker Task 
+@celery.task(name="process-single-mailbox", bind=True, max_retries=3)
+def process_single_mailbox(self, user_id: str):
     """
-    The main Celery task that orchestrates the email processing workflow.
+    Synchronous Celery task wrapper that executes the async logic for a single user.
     """
-    logger.info("Celery task 'pull_and_process_emails' triggered.")
+    logger.info("Celery worker task triggered for user: %s", user_id)
     try:
-        asyncio.run(pull_and_process_emails_logic())
+        asyncio.run(process_single_mailbox_logic(user_id=user_id))
     except Exception as e:
-        logger.critical("An unexpected critical error occurred in the email task, will retry.", exc_info=True)
+        logger.critical("Unexpected critical error processing for user %s: %s", user_id, str(e), exc_info=True)
         raise self.retry(countdown=60 * (2 ** self.request.retries), exc=e)
-    logger.info("Task 'pull_and_process_emails' finished successfully.")
+
+# Synchronous Celery Dispatcher Task 
+@celery.task(name="dispatch-email-processing")
+def dispatch_email_processing():
+    """
+    The main scheduled task. It fetches all authenticated users and dispatches
+    a separate worker task for each one.
+    """
+    logger.info("Dispatcher task running: finding users to process...")
+    try:
+        asyncio.run(dispatch_email_processing_logic())
+    except Exception as e:
+        logger.error("Failed to dispatch email processing tasks: %s", str(e), exc_info=True)
+
+@manage_postgres_connection
+async def dispatch_email_processing_logic():
+    """Async logic for dispatching email processing tasks."""
+    users = await postgres_client.fetch_all("SELECT user_id FROM auth_tokens;")
+    if not users:
+        logger.info("No authenticated users found to process.")
+        return
+
+    logger.info("Found %d users. Dispatching tasks...", len(users))
+    dispatched_count = 0
+    
+    for user in users:
+        user_id = user["user_id"]
+        try:
+            logger.info("Dispatching task for user: %s", user_id)
+            process_single_mailbox.delay(user_id=user_id)
+            dispatched_count += 1
+        except Exception as e:
+            logger.error("Failed to dispatch task for user %s: %s", user_id, str(e))
+            continue
+            
+    logger.info("Successfully dispatched %d out of %d user tasks", dispatched_count, len(users))

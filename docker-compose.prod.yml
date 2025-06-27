@@ -9,6 +9,7 @@ services:
       dockerfile: Dockerfile
       target: api-runtime
     env_file: .env.production
+    depends_on: [] 
     
   worker:
     build:
@@ -17,6 +18,7 @@ services:
       target: api-runtime
     command: celery -A app.celery_app.celery worker --loglevel=info --pool=prefork -c 4
     env_file: .env.production
+    depends_on: [] 
     
   beat:
     build:

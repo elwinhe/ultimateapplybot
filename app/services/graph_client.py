@@ -4,160 +4,132 @@ app/services/graph_client.py
 Service layer for interacting with the Microsoft Graph API.
 """
 from __future__ import annotations
-
 import logging
 from typing import Iterable, List, Optional, Dict
 from datetime import datetime, timezone
-
 import httpx
 
-# --- Qualified Internal Imports ---
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
-from app.config import settings
 from app.models.email import Email
 
 logger = logging.getLogger(__name__)
 
-# --- Custom Typed Exceptions ---
-class GraphClientError(Exception):
-    """Base exception for GraphClient failures."""
-    pass
-
-class GraphAPIFailedRequest(GraphClientError):
-    """Raised when the Microsoft Graph API returns an error status code."""
-    pass
-
-class GraphClientAuthenticationError(GraphClientError):
-    """Raised when authentication fails."""
-    pass
-
+class GraphClientError(Exception): pass
+class GraphAPIFailedRequest(GraphClientError): pass
+class GraphClientAuthenticationError(GraphClientError): pass
 
 _GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 
-
 class GraphClient:
-    """
-    A high-level async client for Microsoft Graph email operations.
-
-    This client is designed for testability and robustness, using an injected
-    HTTP client. It supports delegated authentication flow.
-    """
+    """A high-level async client for Microsoft Graph email operations."""
     _http_client: httpx.AsyncClient
     _authenticator: DelegatedGraphAuthenticator
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
-        """
-        Initializes the GraphClient with an HTTP client.
-
-        Args:
-            http_client: An httpx.AsyncClient for making requests. Reusing the
-                         client improves performance.
-        """
         self._http_client = http_client
         self._authenticator = DelegatedGraphAuthenticator(http_client=http_client)
-        logger.info("GraphClient initialized for delegated authentication")
+        logger.info("GraphClient initialized for multi-user delegated authentication.")
 
-    async def _get_auth_headers(self) -> Dict[str, str]:
-        """
-        Asynchronously acquires a token and formats it into authorization headers.
-        
-        Returns:
-            Dictionary containing Authorization header with Bearer token.
+    async def _get_auth_headers(self, user_id: str) -> Dict[str, str]:
+        """Acquires a token for a specific user."""
+        # Input validation
+        if not user_id or not isinstance(user_id, str):
+            raise GraphClientAuthenticationError("Invalid user_id provided")
             
-        Raises:
-            GraphClientAuthenticationError: If authentication fails.
-        """
-        logger.debug("Acquiring access token for Graph API call...")
         try:
-            token = await self._authenticator.get_access_token_for_user()
+            logger.debug("Acquiring access token for user: %s", user_id)
+            token = await self._authenticator.get_access_token_for_user(user_id)
             return {"Authorization": f"Bearer {token}"}
         except GraphAuthError as e:
-            logger.error("Authentication failed while preparing Graph API request: %s", str(e))
-            raise GraphClientAuthenticationError("Could not authenticate for Graph API request") from e
+            logger.error("Authentication failed for user %s: %s", user_id, str(e))
+            raise GraphClientAuthenticationError(f"Could not authenticate for user {user_id}") from e
 
     async def fetch_messages(
-        self,
-        *,
-        top: int = 50,
-        since: Optional[datetime] = None,
-        select: Optional[Iterable[str]] = None,
+        self, *, user_id: str, top: int = 50, since: Optional[datetime] = None, select: Optional[Iterable[str]] = None
     ) -> List[Email]:
-        """
-        Fetches a list of email messages from the authenticated user's mailbox.
-
-        Args:
-            top: The maximum number of messages to return (default: 50).
-            since: If provided, fetches messages received after this timestamp.
-            select: A list of specific fields to retrieve.
-
-        Returns:
-            A list of validated Pydantic Email models.
-
-        Raises:
-            GraphAPIFailedRequest: If the API returns a non-2xx status code.
-            GraphClientError: For other unexpected errors during the process.
-        """
-        params: dict[str, str | int] = {
-            "$top": top,
-            "$orderby": "receivedDateTime DESC",
-        }
+        """Fetches email messages for a specific user."""
+        # Input validation
+        if not user_id or not isinstance(user_id, str):
+            raise GraphClientError("Invalid user_id provided")
+        if not isinstance(top, int) or top < 1 or top > 1000:
+            raise GraphClientError("Invalid top parameter: must be between 1 and 1000")
+        if since and not isinstance(since, datetime):
+            raise GraphClientError("Invalid since parameter: must be a datetime object")
+            
+        params: dict[str, str | int] = {"$top": top, "$orderby": "receivedDateTime DESC"}
         if since:
-            iso = since.astimezone(timezone.utc).isoformat(timespec="seconds")
-            params["$filter"] = f"receivedDateTime gt {iso}"
+            params["$filter"] = f"receivedDateTime gt {since.astimezone(timezone.utc).isoformat(timespec='seconds')}"
         if select:
             params["$select"] = ",".join(select)
 
-        # Use /me endpoint for delegated auth
         url = f"{_GRAPH_BASE_URL}/me/messages"
-        logger.info("Fetching messages from authenticated user's mailbox with params: %s", params)
-
+        logger.info("Fetching messages for user %s with params: %s", user_id, params)
+        
         try:
-            headers = await self._get_auth_headers()
-            response = await self._http_client.get(url, headers=headers, params=params)
+            headers = await self._get_auth_headers(user_id)
+            response = await self._http_client.get(
+                url, 
+                headers=headers, 
+                params=params, 
+            )
             response.raise_for_status()
-            raw_list = response.json().get("value", [])
-
-            logger.info("Successfully fetched %d messages from Graph API", len(raw_list))
-            return [Email.model_validate(m) for m in raw_list]
-
+            
+            raw_messages = response.json().get("value", [])
+            logger.info("Successfully fetched %d messages for user %s", len(raw_messages), user_id)
+            
+            return [Email.model_validate(m) for m in raw_messages]
+            
+        except httpx.TimeoutException as e:
+            logger.error("Timeout fetching messages for user %s: %s", user_id, str(e))
+            raise GraphClientError(f"Request timeout for user {user_id}") from e
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error fetching messages: %s - %s", e.response.status_code, e.response.text)
+            logger.error("HTTP error fetching messages for user %s: %s - %s", 
+                        user_id, e.response.status_code, e.response.text)
             raise GraphAPIFailedRequest(f"Graph API returned status {e.response.status_code}") from e
         except GraphClientAuthenticationError:
             # Re-raise authentication errors as-is
             raise
         except Exception as e:
-            logger.error("Unexpected error fetching messages: %s", str(e), exc_info=True)
+            logger.error("Unexpected error fetching messages for user %s: %s", user_id, str(e), exc_info=True)
             raise GraphClientError("An unexpected error occurred during message fetching") from e
 
-    async def fetch_eml_content(self, *, message_id: str) -> bytes:
-        """
-        Fetches the raw MIME content (.eml) of a single email message.
-
-        Args:
-            message_id: The unique identifier of the message.
-
-        Returns:
-            The raw MIME content as bytes.
-
-        Raises:
-            GraphAPIFailedRequest: If the API returns a non-2xx status code.
-            GraphClientError: For other unexpected errors during the process.
-        """
+    async def fetch_eml_content(self, *, user_id: str, message_id: str) -> bytes:
+        """Fetches the raw .eml content of a single email message for a specific user."""
+        # Input validation
+        if not user_id or not isinstance(user_id, str):
+            raise GraphClientError("Invalid user_id provided")
+        if not message_id or not isinstance(message_id, str):
+            raise GraphClientError("Invalid message_id provided")
+            
         url = f"{_GRAPH_BASE_URL}/me/messages/{message_id}/$value"
-        logger.info("Fetching EML content from: %s", url)
-
+        logger.info("Fetching EML content for message %s, user %s", message_id, user_id)
+        
         try:
-            headers = await self._get_auth_headers()
-            response = await self._http_client.get(url, headers=headers)
+            headers = await self._get_auth_headers(user_id)
+            response = await self._http_client.get(
+                url, 
+                headers=headers, 
+            )
             response.raise_for_status()
+            
+            content_size = len(response.content)
+            logger.info("Successfully fetched EML content for message %s, user %s (%d bytes)", 
+                       message_id, user_id, content_size)
+            
             return response.content
+            
+        except httpx.TimeoutException as e:
+            logger.error("Timeout fetching EML content for message %s, user %s: %s", 
+                        message_id, user_id, str(e))
+            raise GraphClientError(f"Request timeout for message {message_id}") from e
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error fetching EML content: %s - %s", e.response.status_code, e.response.text)
+            logger.error("HTTP error fetching EML content for message %s, user %s: %s - %s", 
+                        message_id, user_id, e.response.status_code, e.response.text)
             raise GraphAPIFailedRequest(f"Graph API returned status {e.response.status_code}") from e
         except GraphClientAuthenticationError:
             # Re-raise authentication errors as-is
             raise
         except Exception as e:
-            logger.error("Unexpected error fetching EML content: %s", str(e), exc_info=True)
+            logger.error("Unexpected error fetching EML content for message %s, user %s: %s", 
+                        message_id, user_id, str(e), exc_info=True)
             raise GraphClientError("An unexpected error occurred during EML content fetching") from e

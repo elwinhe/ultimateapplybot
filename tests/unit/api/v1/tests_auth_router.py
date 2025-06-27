@@ -22,7 +22,6 @@ from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 
 
 # Test Application Setup
-
 @pytest.fixture
 def test_app() -> FastAPI:
     """Creates a minimal FastAPI app instance including only the auth router."""

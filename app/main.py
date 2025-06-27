@@ -22,7 +22,7 @@ from app.api.v1 import health as health_v1_router
 from app.api.v1 import auth_router
 from app.config import settings
 from app.services.postgres_client import postgres_client
-from app.tasks.email_tasks import pull_and_process_emails_logic
+from app.celery_app import celery
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(
         title="EmailReader API",
-        description="An API for processing and archiving emails.",
+        description="A multi-user API for processing and archiving emails.",
         version="0.1.0",
         lifespan=lifespan  # Register the lifespan manager
     )
@@ -70,25 +70,53 @@ def create_app() -> FastAPI:
     # Mount the auth router with the v1 prefix.
     app.include_router(auth_router.router, prefix="/api/v1")
 
-    # Add a direct email processing endpoint
+    # Add a direct email processing endpoint for manual triggering
     @app.post("/api/v1/emails/process")
     async def trigger_email_processing():
         """
-        Trigger email processing directly through the main application.
-        This uses the already initialized PostgreSQL connection pool.
+        Trigger email processing for all authenticated users.
+        This dispatches the multi-user email processing task via Celery.
         """
         try:
-            logger.info("Triggering email processing through main application...")
-            await pull_and_process_emails_logic()
+            logger.info("Triggering multi-user email processing via Celery...")
+            # Dispatch the multi-user email processing task
+            task = celery.send_task('app.tasks.email_tasks.dispatch_email_processing')
             return JSONResponse(
-                status_code=200,
-                content={"message": "Email processing completed successfully"}
+                status_code=202,  # Accepted
+                content={
+                    "message": "Email processing dispatched successfully",
+                    "task_id": task.id,
+                    "status": "processing"
+                }
             )
         except Exception as e:
-            logger.error(f"Email processing failed: {e}", exc_info=True)
+            logger.error(f"Failed to dispatch email processing: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=f"Email processing failed: {str(e)}"
+                detail=f"Failed to dispatch email processing: {str(e)}"
+            )
+
+    # Add a task status endpoint
+    @app.get("/api/v1/tasks/{task_id}")
+    async def get_task_status(task_id: str):
+        """
+        Get the status of a Celery task.
+        """
+        try:
+            task_result = celery.AsyncResult(task_id)
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "task_id": task_id,
+                    "status": task_result.status,
+                    "result": task_result.result if task_result.ready() else None
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to get task status: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to get task status: {str(e)}"
             )
 
     logger.info("Application created and routers included.")

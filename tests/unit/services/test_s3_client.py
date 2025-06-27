@@ -32,7 +32,7 @@ def test_s3_client_initialization_success():
                 )
             else:
                 s3_conn.create_bucket(Bucket=settings.S3_BUCKET_NAME)
-        except s3_conn.exceptions.BucketAlreadyExists:
+        except (s3_conn.exceptions.BucketAlreadyExists, s3_conn.exceptions.BucketAlreadyOwnedByYou):
             pass  # It's okay if it already exists from a previous run
             
         try:

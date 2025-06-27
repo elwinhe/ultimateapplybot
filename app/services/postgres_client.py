@@ -31,9 +31,6 @@ class PostgresConnectionError(PostgresClientError):
 class PostgresClient:
     """
     Handles all interactions with the PostgreSQL database.
-
-    This class manages the asyncpg connection pool and provides
-    high-level methods for database operations.
     """
 
     def __init__(self) -> None:
@@ -42,171 +39,73 @@ class PostgresClient:
         self._connection_string: str = settings.DATABASE_URL
 
     async def initialize(self) -> None:
-        """
-        Initialize the connection pool.
-        
-        Raises:
-            PostgresConnectionError: If connection pool creation fails.
-        """
+        """Initialize the connection pool and create tables."""
+        if self._pool:
+            return
         try:
             self._pool = await asyncpg.create_pool(
-                self._connection_string,
-                min_size=1,
-                max_size=10,
-                command_timeout=60,
-                server_settings={
-                    'application_name': 'emailreader'
-                }
+                self._connection_string, min_size=1, max_size=10
             )
             logger.info("PostgreSQL connection pool initialized successfully")
-            
-            # Test the connection
-            async with self._pool.acquire() as conn:
-                await conn.execute("SELECT 1")
-            logger.info("PostgreSQL connection test successful")
-            
-            # Create tables after successful connection
             await self.create_tables()
-            
         except Exception as e:
-            logger.critical("Failed to initialize PostgreSQL client: %s", str(e), exc_info=True)
+            logger.critical("Failed to initialize PostgreSQL client", exc_info=True)
             raise PostgresConnectionError("Could not establish connection to PostgreSQL") from e
 
     async def close(self) -> None:
         """Close the connection pool."""
         if self._pool:
             await self._pool.close()
+            self._pool = None
             logger.info("PostgreSQL connection pool closed")
 
     @asynccontextmanager
     async def get_connection(self) -> AsyncGenerator[Connection, None]:
-        """
-        Get a database connection from the pool.
-        
-        Yields:
-            Connection: An asyncpg connection object.
-            
-        Raises:
-            PostgresConnectionError: If no connection pool is available.
-        """
+        """Provides a database connection from the pool."""
         if not self._pool:
             raise PostgresConnectionError("Connection pool not initialized")
-        
         async with self._pool.acquire() as connection:
             yield connection
 
     async def execute(self, query: str, *args) -> str:
-        """
-        Execute a query that doesn't return results.
-        
-        Args:
-            query: SQL query to execute.
-            *args: Query parameters.
-            
-        Returns:
-            Status message from the query execution.
-            
-        Raises:
-            PostgresConnectionError: If query execution fails.
-        """
+        """Execute a query that doesn't return results."""
         try:
             async with self.get_connection() as conn:
-                result = await conn.execute(query, *args)
-                logger.debug("Executed query: %s", query)
-                return result
+                return await conn.execute(query, *args)
         except Exception as e:
             logger.error("Failed to execute query: %s", query, exc_info=True)
             raise PostgresConnectionError(f"Query execution failed: {str(e)}") from e
 
     async def fetch_one(self, query: str, *args) -> Optional[asyncpg.Record]:
-        """
-        Fetch a single row from the database.
-        
-        Args:
-            query: SQL query to execute.
-            *args: Query parameters.
-            
-        Returns:
-            Single row as Record or None if no results.
-            
-        Raises:
-            PostgresConnectionError: If query execution fails.
-        """
+        """Fetch a single row from the database."""
         try:
             async with self.get_connection() as conn:
-                result = await conn.fetchrow(query, *args)
-                logger.debug("Fetched one row: %s", query)
-                return result
+                return await conn.fetchrow(query, *args)
         except Exception as e:
             logger.error("Failed to fetch one row: %s", query, exc_info=True)
             raise PostgresConnectionError(f"Fetch one failed: {str(e)}") from e
-
+            
     async def fetch_all(self, query: str, *args) -> list[asyncpg.Record]:
-        """
-        Fetch all rows from the database.
-        
-        Args:
-            query: SQL query to execute.
-            *args: Query parameters.
-            
-        Returns:
-            List of rows as Records.
-            
-        Raises:
-            PostgresConnectionError: If query execution fails.
-        """
+        """Fetch all rows from the database."""
         try:
             async with self.get_connection() as conn:
-                result = await conn.fetch(query, *args)
-                logger.debug("Fetched %d rows: %s", len(result), query)
-                return result
+                return await conn.fetch(query, *args)
         except Exception as e:
             logger.error("Failed to fetch all rows: %s", query, exc_info=True)
             raise PostgresConnectionError(f"Fetch all failed: {str(e)}") from e
 
     async def create_tables(self) -> None:
         """Create necessary database tables if they don't exist."""
-        create_emails_table = """
-        CREATE TABLE IF NOT EXISTS emails (
-            id VARCHAR(255) PRIMARY KEY,
-            subject TEXT,
-            from_address VARCHAR(255),
-            from_name VARCHAR(255),
-            received_date_time TIMESTAMP WITH TIME ZONE,
-            has_attachments BOOLEAN DEFAULT FALSE,
-            body_content_type VARCHAR(50),
-            body_content TEXT,
-            s3_key VARCHAR(1024),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        """
-        
-        create_attachments_table = """
-        CREATE TABLE IF NOT EXISTS email_attachments (
-            id VARCHAR(255) PRIMARY KEY,
-            email_id VARCHAR(255) REFERENCES emails(id) ON DELETE CASCADE,
-            name VARCHAR(255),
-            content_type VARCHAR(100),
-            size BIGINT,
-            s3_key VARCHAR(1024),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-        """
-        
+        # --- SIMPLIFIED SCHEMA ---
+        # This table now only contains the columns the application actually uses.
         create_archived_emails_table = """
         CREATE TABLE IF NOT EXISTS archived_emails (
             message_id VARCHAR(255) PRIMARY KEY,
             subject TEXT,
-            received_date_time TIMESTAMP WITH TIME ZONE,
-            from_address VARCHAR(255),
-            to_addresses TEXT[],
-            s3_key VARCHAR(1024),
-            archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            s3_key VARCHAR(1024) NOT NULL,
+            archived_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
-        
-        # Table for storing refresh tokens
         create_auth_tokens_table = """
         CREATE TABLE IF NOT EXISTS auth_tokens (
             user_id VARCHAR(255) PRIMARY KEY,
@@ -214,33 +113,20 @@ class PostgresClient:
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
-        
         try:
-            await self.execute(create_emails_table)
-            await self.execute(create_attachments_table)
             await self.execute(create_archived_emails_table)
             await self.execute(create_auth_tokens_table)
-            logger.info("Database tables created successfully")
+            logger.info("Database tables checked/created successfully.")
         except Exception as e:
-            logger.error("Failed to create tables: %s", str(e), exc_info=True)
+            logger.error("Failed to create tables", exc_info=True)
             raise PostgresClientError("Failed to create database tables") from e
 
 # Singleton instance
 postgres_client = PostgresClient()
 
-# --- Token Storage Functions ---
-# These functions use the postgres_client to interact with the auth_tokens table.
-
+# Token Storage Functions
 async def store_refresh_token(user_id: str, refresh_token: str):
-    """
-    Stores or updates a user's refresh token in the database.
-    
-    Args:
-        user_id: The user identifier
-        refresh_token: The refresh token to store
-        
-    Note: In a production environment, the refresh_token should be encrypted before storage.
-    """
+    """Stores or updates a user's refresh token in the database."""
     await postgres_client.execute(
         """
         INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
@@ -251,15 +137,7 @@ async def store_refresh_token(user_id: str, refresh_token: str):
     )
 
 async def get_refresh_token(user_id: str) -> Optional[str]:
-    """
-    Retrieves a user's refresh token from the database.
-    
-    Args:
-        user_id: The user identifier
-        
-    Returns:
-        The refresh token if found, None otherwise
-    """
+    """Retrieves a user's refresh token from the database."""
     row = await postgres_client.fetch_one(
         "SELECT encrypted_refresh_token FROM auth_tokens WHERE user_id = $1",
         user_id
