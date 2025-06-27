@@ -19,8 +19,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-# --- Celery App Initialization ---
-
 celery = Celery("emailreader")
 
 celery.conf.update(
@@ -29,7 +27,6 @@ celery.conf.update(
     result_backend=settings.REDIS_URL,
     timezone='UTC',
 
-    # Enforce JSON for tasks and results to prevent deserialization vulnerabilities.
     accept_content=['json'],
     task_serializer='json',
     result_serializer='json',
@@ -70,7 +67,7 @@ celery.conf.update(
     beat_schedule={
         'dispatch-email-processing-every-15-minutes': {
             'task': 'dispatch-email-processing',
-            'schedule': 15.0,
+            'schedule': 900.0, # 900 seconds = 15 minutes
             'options': {'queue': 'email_processing'},
         },
     },

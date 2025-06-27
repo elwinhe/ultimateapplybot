@@ -108,6 +108,8 @@ services:
       target: test-runtime
     container_name: emailreader_test_runner
     env_file: .env
+    environment:
+      - S3_ENDPOINT_URL=http://moto:5000
     volumes:
       - ./app:/app/app
       - ./tests:/app/tests

@@ -81,7 +81,6 @@ async def test_upload_eml_file_success():
     s3_object = s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
     assert s3_object["Body"].read() == file_content
     assert s3_object["ContentType"] == 'message/rfc822'
-    # Clean up
     s3_conn.delete_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
 
 

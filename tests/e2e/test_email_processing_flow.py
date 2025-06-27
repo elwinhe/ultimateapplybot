@@ -100,7 +100,6 @@ async def test_process_single_mailbox_happy_path(e2e_test_setup):
     """
     Tests the full, successful workflow for a single user's mailbox.
     """
-    # Arrange
     user_id = "test-user@example.com"
     now_utc = datetime.now(timezone.utc)
     mock_email = Email(
@@ -111,10 +110,9 @@ async def test_process_single_mailbox_happy_path(e2e_test_setup):
     e2e_test_setup.fetch_messages.return_value = [mock_email]
     e2e_test_setup.fetch_eml_content.return_value = b"MIME content"
 
-    # Act
     await process_single_mailbox_logic(user_id)
 
-    # Assert: Verify S3 upload
+    # Verify S3 upload
     s3_conn = boto3.client("s3", region_name=settings.AWS_REGION, endpoint_url="http://moto:5000",
                            aws_access_key_id="testing", aws_secret_access_key="testing")
     s3_key = f"emails/{mock_email.id}.eml"
@@ -147,13 +145,11 @@ async def test_process_single_mailbox_s3_failure_handling(e2e_test_setup, mocker
     )
     e2e_test_setup.fetch_messages.return_value = [mock_email]
     e2e_test_setup.fetch_eml_content.return_value = b"MIME content"
-    # Mock the S3 client to raise an error
     mocker.patch('app.tasks.email_tasks.s3_client.upload_eml_file', side_effect=S3UploadError("Mock S3 Failure"))
 
-    # Act
     await process_single_mailbox_logic(user_id)
 
-    # Assert: Verify Redis high-water mark was NOT updated
+    # Verify Redis high-water mark was NOT updated
     redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
     redis_key = f"email_processor:last_seen_timestamp:{user_id}"
     assert redis_client.get(redis_key) is None
