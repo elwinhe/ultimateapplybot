@@ -121,3 +121,7 @@ To run a test against your live AWS S3 bucket or RDS instance (use with caution)
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml run --rm test-runner pytest tests/integration/test_s3_upload.py
 ```
 
+### Notes
+- right now upon every new build, the session authentication token is wiped.
+- upon every new build, all emails will be processed again
+

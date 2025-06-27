@@ -43,6 +43,7 @@ class PostgresClient:
         if self._pool:
             return
         try:
+            logger.warning("DB_CLIENT_INIT: Connecting with DSN: %s", self._connection_string)
             self._pool = await asyncpg.create_pool(
                 self._connection_string, min_size=1, max_size=10
             )

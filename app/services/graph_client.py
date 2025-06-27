@@ -58,9 +58,8 @@ class GraphClient:
             
         params: dict[str, str | int] = {"$top": top, "$orderby": "receivedDateTime DESC"}
         if since:
-            # Graph API requires the datetime string to be in a specific format and quoted
             since_str = since.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            params["$filter"] = f"receivedDateTime gt '{since_str}'"
+            params["$filter"] = f"receivedDateTime gt {since_str}"
         if select:
             params["$select"] = ",".join(select)
 

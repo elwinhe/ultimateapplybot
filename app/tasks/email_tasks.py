@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from dateutil.parser import isoparse
 
 import httpx
 import redis
@@ -51,7 +52,7 @@ async def process_single_mailbox_logic(user_id: str):
     redis_key = f"email_processor:last_seen_timestamp:{user_id}"
     
     last_seen_iso = redis_client.get(redis_key)
-    since = datetime.fromisoformat(last_seen_iso) if last_seen_iso else None
+    since = isoparse(last_seen_iso) if last_seen_iso else None
 
     async with httpx.AsyncClient(timeout=60.0) as http_client:
         # The GraphClient now correctly handles auth internally
@@ -85,12 +86,15 @@ async def process_single_mailbox_logic(user_id: str):
         
         logger.info("Processed %d emails for user %s", processed_count, user_id)
         
-        if not batch_had_errors:
+        # Only update the timestamp if the batch was fully successful and something was processed.
+        if not batch_had_errors and processed_count > 0:
             newest_timestamp = new_emails[0].received_date_time.isoformat()
             redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp)
             logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp)
-        else:
+        elif batch_had_errors:
             logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
+        else:
+            logger.info("No relevant emails were processed for user %s. High-water mark not updated.", user_id)
 
 # Synchronous Celery Worker Task 
 @celery.task(name="process-single-mailbox", bind=True, max_retries=3)
