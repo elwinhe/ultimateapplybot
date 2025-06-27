@@ -1,7 +1,8 @@
 """
 app/services/postgres_client.py
 
-Provides a robust client for interacting with PostgreSQL database.
+Provides a robust client for interacting with PostgreSQL database, including
+methods for storing and retrieving authentication tokens.
 """
 from __future__ import annotations
 
@@ -63,6 +64,9 @@ class PostgresClient:
             async with self._pool.acquire() as conn:
                 await conn.execute("SELECT 1")
             logger.info("PostgreSQL connection test successful")
+            
+            # Create tables after successful connection
+            await self.create_tables()
             
         except Exception as e:
             logger.critical("Failed to initialize PostgreSQL client: %s", str(e), exc_info=True)
@@ -202,10 +206,20 @@ class PostgresClient:
         );
         """
         
+        # Table for storing refresh tokens
+        create_auth_tokens_table = """
+        CREATE TABLE IF NOT EXISTS auth_tokens (
+            user_id VARCHAR(255) PRIMARY KEY,
+            encrypted_refresh_token TEXT NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        """
+        
         try:
             await self.execute(create_emails_table)
             await self.execute(create_attachments_table)
             await self.execute(create_archived_emails_table)
+            await self.execute(create_auth_tokens_table)
             logger.info("Database tables created successfully")
         except Exception as e:
             logger.error("Failed to create tables: %s", str(e), exc_info=True)
@@ -213,3 +227,41 @@ class PostgresClient:
 
 # Singleton instance
 postgres_client = PostgresClient()
+
+# --- Token Storage Functions ---
+# These functions use the postgres_client to interact with the auth_tokens table.
+
+async def store_refresh_token(user_id: str, refresh_token: str):
+    """
+    Stores or updates a user's refresh token in the database.
+    
+    Args:
+        user_id: The user identifier
+        refresh_token: The refresh token to store
+        
+    Note: In a production environment, the refresh_token should be encrypted before storage.
+    """
+    await postgres_client.execute(
+        """
+        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
+        """,
+        user_id, refresh_token
+    )
+
+async def get_refresh_token(user_id: str) -> Optional[str]:
+    """
+    Retrieves a user's refresh token from the database.
+    
+    Args:
+        user_id: The user identifier
+        
+    Returns:
+        The refresh token if found, None otherwise
+    """
+    row = await postgres_client.fetch_one(
+        "SELECT encrypted_refresh_token FROM auth_tokens WHERE user_id = $1",
+        user_id
+    )
+    return row["encrypted_refresh_token"] if row else None

@@ -40,11 +40,11 @@ celery.conf.update(
     # Celery Beat Configuration - Use writable directory
     beat_schedule_filename='/tmp/celerybeat-schedule',
     beat_scheduler='celery.beat.PersistentScheduler',
-    
+
     # Periodic Task Schedule (Celery Beat
     beat_schedule={
         'pull-new-emails-every-15-minutes': {
-            'task': 'app.tasks.email_tasks.pull_new_emails',
+            'task': 'app.tasks.email_tasks.pull_and_process_emails',
             'schedule': 900.0, # 900 seconds = 15 minutes
         },
     },

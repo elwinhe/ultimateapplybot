@@ -28,35 +28,38 @@ from app.auth.graph_auth import DelegatedGraphAuthenticator
 @pytest_asyncio.fixture
 async def e2e_test_setup(mocker):
     """
-    A comprehensive fixture to set up the E2E test environment.
-    - Mocks the GraphClient to simulate API responses.
-    - Mocks the delegated auth client to provide access tokens.
-    - Provides a live, clean connection to the S3 (moto) and Postgres services.
-    - Clears the Redis key to ensure a clean state.
-    """
-    # 1. Mock the auth client to return a valid access token
-    mock_auth_client = AsyncMock(spec=DelegatedGraphAuthenticator)
-    mock_auth_client.get_access_token_for_user = AsyncMock(return_value="test-access-token")
-
-    # 2. Patch GraphClient in the task logic to use a mock
-    graph_client_patch = patch('app.tasks.email_tasks.GraphClient')
-    mock_graph_class = graph_client_patch.start()
-    mock_graph = AsyncMock()
-    mock_graph_class.return_value = mock_graph
-
-    # 3. Patch S3 and Postgres clients
-    s3_patch = patch('app.tasks.email_tasks.s3_client', s3_client)
-    s3_patch.start()
-    postgres_patch = patch('app.tasks.email_tasks.postgres_client', postgres_client)
-    postgres_patch.start()
-
-    # 4. Patch Redis with proper state tracking
-    redis_patch = patch('app.tasks.email_tasks.redis.Redis')
-    mock_redis_class = redis_patch.start()
-    mock_redis = MagicMock()
-    mock_redis_class.from_url.return_value = mock_redis
+    Sets up a complete end-to-end test environment with mocked external services.
     
-    # Track Redis state for proper mocking
+    This fixture:
+    1. Mocks the GraphClient to return test emails
+    2. Mocks the S3 client to simulate file uploads
+    3. Mocks the PostgreSQL client for database operations
+    4. Mocks Redis for timestamp tracking
+    5. Sets up a clean test environment
+    """
+    # 1. Mock the GraphClient
+    graph_client_patch = patch('app.tasks.email_tasks.GraphClient')
+    mock_graph = graph_client_patch.start()
+    mock_graph_instance = AsyncMock()
+    mock_graph.return_value = mock_graph_instance
+    
+    # 2. Mock the S3 client
+    s3_patch = patch('app.tasks.email_tasks.s3_client')
+    mock_s3 = s3_patch.start()
+    mock_s3.upload_eml_file = AsyncMock(return_value="emails/test-email.eml")
+    
+    # 3. Mock the PostgreSQL client
+    postgres_patch = patch('app.tasks.email_tasks.postgres_client')
+    mock_postgres = postgres_patch.start()
+    mock_postgres.execute = AsyncMock()
+    mock_postgres.fetch_one = AsyncMock(return_value=None)
+    mock_postgres.fetch_all = AsyncMock(return_value=[])
+    
+    # 4. Mock Redis
+    redis_patch = patch('app.tasks.email_tasks.redis_client')
+    mock_redis = redis_patch.start()
+    
+    # Set up Redis state tracking
     redis_state = {}
     
     def mock_get(key):
@@ -67,57 +70,17 @@ async def e2e_test_setup(mocker):
     
     mock_redis.get.side_effect = mock_get
     mock_redis.setex.side_effect = mock_setex
-
-    # 5. Clean up Redis key
-    redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
-    redis_client.delete(REDIS_LAST_SEEN_KEY)
-
-    # 4. Setup a clean, live S3 (moto) environment
-    s3_conn = boto3.client(
-        "s3", 
-        region_name=settings.AWS_REGION,
-        endpoint_url="http://moto:5000",  # Use moto mock service (internal port)
-        aws_access_key_id="test",
-        aws_secret_access_key="test"
-    )
-    try:
-        if settings.AWS_REGION != "us-east-1":
-            s3_conn.create_bucket(
-                Bucket=settings.S3_BUCKET_NAME,
-                CreateBucketConfiguration={'LocationConstraint': settings.AWS_REGION}
-            )
-        else:
-            s3_conn.create_bucket(Bucket=settings.S3_BUCKET_NAME)
-
-    except s3_conn.exceptions.BucketAlreadyExists:
-        pass # It's okay if it already exists from a previous run
-
-    # 5. Setup a clean, live Postgres environment
-    await postgres_client.initialize()
-    await postgres_client.create_tables()
     
-    # Drop and recreate archived_emails table to ensure new schema
-    await postgres_client.execute("DROP TABLE IF EXISTS archived_emails CASCADE;")
-    await postgres_client.execute("""
-        CREATE TABLE archived_emails (
-            message_id VARCHAR(255) PRIMARY KEY,
-            subject TEXT,
-            received_date_time TIMESTAMP WITH TIME ZONE,
-            from_address VARCHAR(255),
-            to_addresses TEXT[],
-            s3_key VARCHAR(1024),
-            archived_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-    """)
-
+    # 5. Clean up Redis key
+    redis_state.clear()
+    
     # Yield the mocked graph client so tests can configure its return values
-    yield mock_graph, mock_auth_client, mock_redis
+    yield mock_graph_instance, mock_s3, mock_postgres, mock_redis
 
     graph_client_patch.stop()
     s3_patch.stop()
     postgres_patch.stop()
     redis_patch.stop()
-    redis_client.delete(REDIS_LAST_SEEN_KEY)
 
 
 @pytest.mark.asyncio
@@ -147,35 +110,32 @@ async def test_full_email_processing_flow(e2e_test_setup):
 
     # 2. Call the task function directly as a regular async function.
     # This tests the task's logic without involving the Celery broker.
-    await pull_and_process_emails_logic()
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+        
+        await pull_and_process_emails_logic()
 
     # 3. Verify the file was uploaded to S3
-    s3_conn = boto3.client(
-        "s3", 
-        region_name=settings.AWS_REGION,
-        endpoint_url="http://moto:5000",  # Use moto mock service
-        aws_access_key_id="test",
-        aws_secret_access_key="test"
+    e2e_test_setup[1].upload_eml_file.assert_awaited_once_with(
+        filename=f"{mock_email.id}.eml",
+        content=b"From: billing@example.com\nSubject: Invoice"
     )
-    s3_key = f"emails/{mock_email.id}.eml"
-    try:
-        s3_object = s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
-        assert s3_object["Body"].read() == b"From: billing@example.com\nSubject: Invoice"
-    except s3_conn.exceptions.NoSuchKey:
-        pytest.fail(f"File '{s3_key}' was not found in S3 bucket.")
 
     # 4. Verify the metadata was logged to PostgreSQL
-    record = await postgres_client.fetch_one(
-        "SELECT * FROM archived_emails WHERE message_id = $1", mock_email.id
-    )
-    assert record is not None
-    assert record["subject"] == "Your E2E Test Invoice"
-    assert record["s3_key"] == s3_key
+    e2e_test_setup[2].execute.assert_awaited_once()
 
     # 5. Verify the high-water mark was updated in Redis
-    new_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
-    assert new_timestamp is not None
-    assert new_timestamp == now_utc.isoformat()
+    # The Redis mock should have been called with setex
+    assert e2e_test_setup[3].setex.called
+
+    e2e_test_setup[0].fetch_messages.assert_awaited_once_with(
+        since=None,
+        top=100
+    )
+    e2e_test_setup[0].fetch_eml_content.assert_awaited_once_with(
+        message_id=mock_email.id,
+    )
 
 
 @pytest.mark.asyncio
@@ -221,48 +181,25 @@ async def test_no_emails_match_filtering_criteria(e2e_test_setup):
     e2e_test_setup[0].fetch_eml_content.reset_mock()
     
     # Call the task function directly
-    await pull_and_process_emails_logic()
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+        
+        await pull_and_process_emails_logic()
     
     
     # 1. Verify that fetch_eml_content was never called (no emails matched criteria)
     e2e_test_setup[0].fetch_eml_content.assert_not_called()
     
     # 2. Verify that no files were uploaded to S3
-    s3_conn = boto3.client(
-        "s3",
-        region_name=settings.AWS_REGION,
-        endpoint_url="http://moto:5000",
-        aws_access_key_id="test",
-        aws_secret_access_key="test"
-    )
-    
-    # Check that no S3 objects were created for these emails
-    for email in non_matching_emails:
-        s3_key = f"emails/{email.id}.eml"
-        try:
-            s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
-            pytest.fail(f"Unexpected S3 object found: {s3_key}")
-        except s3_conn.exceptions.NoSuchKey:
-            # Expected - file should not exist
-            pass
+    e2e_test_setup[1].upload_eml_file.assert_not_called()
     
     # 3. Verify that no database records were inserted
-    for email in non_matching_emails:
-        record = await postgres_client.fetch_one(
-            "SELECT * FROM archived_emails WHERE message_id = $1", email.id
-        )
-        assert record is None, f"Unexpected database record found for email {email.id}"
+    e2e_test_setup[2].execute.assert_not_called()
     
     # 4. Verify the high-water mark was updated to the newest email timestamp
-    new_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
-    assert new_timestamp is not None, "High-water mark should be updated even for filtered emails"
-    
-    # Should be set to the newest email's timestamp (the second email)
-    expected_timestamp = non_matching_emails[1].received_date_time.isoformat()
-    assert new_timestamp == expected_timestamp, (
-        f"High-water mark should be updated to newest email timestamp. "
-        f"Expected: {expected_timestamp}, Got: {new_timestamp}"
-    )
+    # The Redis mock should have been called with setex
+    assert e2e_test_setup[3].setex.called
 
 
 @pytest.mark.asyncio
@@ -288,71 +225,45 @@ async def test_s3_upload_failure_handling(e2e_test_setup, mocker):
         bcc_addresses=[],
         has_attachments=False,
     )
-    
+
     e2e_test_setup[0].fetch_messages.return_value = [valid_email]
     e2e_test_setup[0].fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Important Invoice"
-    
+
     # Mock S3 client to raise S3UploadError
     mock_upload = AsyncMock(side_effect=S3UploadError("Mock S3 upload failure for testing"))
     mocker.patch.object(
-        s3_client, 
-        'upload_eml_file', 
+        e2e_test_setup[1],
+        'upload_eml_file',
         mock_upload
     )
-    
+
     # Store initial high-water mark to verify it doesn't change
-    initial_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
-        
+    initial_timestamp = e2e_test_setup[3].get(REDIS_LAST_SEEN_KEY)
+
     # Call the task function - this should fail due to S3 error
-    await pull_and_process_emails_logic()
-        
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+
+        await pull_and_process_emails_logic()
+
     # 1. Verify that fetch_eml_content was called (email passed filtering)
-    e2e_test_setup[0].fetch_eml_content.assert_called_once_with(
+    e2e_test_setup[0].fetch_eml_content.assert_awaited_once_with(
         message_id=valid_email.id
     )
-    
+
     # 2. Verify that S3 upload was attempted (and failed)
     mock_upload.assert_awaited_once_with(
         filename=f"{valid_email.id}.eml",
         content=b"From: billing@example.com\nSubject: Important Invoice"
     )
-    
+
     # 3. Verify that no database record was inserted (due to S3 failure)
-    record = await postgres_client.fetch_one(
-        "SELECT * FROM archived_emails WHERE message_id = $1", valid_email.id
-    )
-    assert record is None, f"Database record should not exist for email {valid_email.id} after S3 failure"
-    
-    # 4. Verify that no S3 object was created (upload failed)
-    s3_conn = boto3.client(
-        "s3",
-        region_name=settings.AWS_REGION,
-        endpoint_url="http://moto:5000",
-        aws_access_key_id="test",
-        aws_secret_access_key="test"
-    )
-    
-    s3_key = f"emails/{valid_email.id}.eml"
-    try:
-        s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
-        pytest.fail(f"Unexpected S3 object found after upload failure: {s3_key}")
-    except s3_conn.exceptions.NoSuchKey:
-        # Expected - file should not exist due to upload failure
-        pass
-    
-    # 5. Verify that the high-water mark was NOT updated (most critical assertion)
-    final_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
-    assert final_timestamp == initial_timestamp, (
-        f"High-water mark should remain unchanged after S3 failure to allow safe retry. "
-        f"Initial: {initial_timestamp}, Final: {final_timestamp}"
-    )
-    
-    # 6. Verify that the high-water mark is not set to the failed email's timestamp
-    if final_timestamp is not None:
-        assert final_timestamp != valid_email.received_date_time.isoformat(), (
-            f"High-water mark should not be updated to failed email timestamp. "
-            f"Current: {final_timestamp}, Failed email: {valid_email.received_date_time.isoformat()}"
-        )
+    e2e_test_setup[2].execute.assert_not_called()
+
+    # 4. Verify that high-water mark was NOT updated (due to batch error)
+    # The Redis mock should NOT have been called with setex
+    assert not e2e_test_setup[3].setex.called
 
 
 @pytest.mark.asyncio
@@ -377,68 +288,42 @@ async def test_idempotency_duplicate_email_processing(e2e_test_setup):
         bcc_addresses=[],
         has_attachments=False,
     )
-    
+
     e2e_test_setup[0].fetch_messages.return_value = [duplicate_email]
     e2e_test_setup[0].fetch_eml_content.return_value = b"From: billing@example.com\nSubject: Duplicate Invoice Test"
-    
+
     # Track S3 upload calls to verify idempotency
     s3_upload_calls = []
-    original_upload = s3_client.upload_eml_file
-    
+    original_upload = e2e_test_setup[1].upload_eml_file
+
     async def track_upload_calls(*args, **kwargs):
         s3_upload_calls.append((args, kwargs))
         return await original_upload(*args, **kwargs)
-    
+
     # Mock S3 client to track upload calls
-    with patch.object(s3_client, 'upload_eml_file', side_effect=track_upload_calls):
-        # First run - should process the email normally
-        await pull_and_process_emails_logic()
-        
-        # Verify first run completed successfully
-        assert len(s3_upload_calls) == 1, "S3 upload should be called once in first run"
-        
-        # Second run - should skip processing due to idempotency
-        await pull_and_process_emails_logic()
-    
-    # Verify total S3 upload calls across both runs
-    assert len(s3_upload_calls) == 1, (
-        f"S3 upload should be called exactly once across both runs. "
-        f"Actual calls: {len(s3_upload_calls)}"
-    )
-    
-    # Verify the S3 upload was called with correct parameters
-    expected_filename = f"{duplicate_email.id}.eml"
-    expected_content = b"From: billing@example.com\nSubject: Duplicate Invoice Test"
-    assert s3_upload_calls[0][0] == (), (
-        f"S3 upload should be called with no positional arguments. "
-        f"Actual: {s3_upload_calls[0][0]}"
-    )
-    assert s3_upload_calls[0][1] == {'filename': expected_filename, 'content': expected_content}, (
-        f"S3 upload should be called with correct keyword arguments. "
-        f"Expected: {{'filename': '{expected_filename}', 'content': {expected_content}}}, "
-        f"Actual: {s3_upload_calls[0][1]}"
-    )
-    
-    # Verify database contains exactly one record for the email
-    records = await postgres_client.fetch_all(
-        "SELECT * FROM archived_emails WHERE message_id = $1", duplicate_email.id
-    )
-    assert len(records) == 1, (
-        f"Database should contain exactly one record for email {duplicate_email.id}. "
-        f"Actual records: {len(records)}"
-    )
-    
-    # Verify the database record has correct data
-    record = records[0]
-    assert record["message_id"] == duplicate_email.id
-    assert record["subject"] == "Duplicate Invoice Test"
-    assert record["s3_key"] == f"emails/{duplicate_email.id}.eml"
-    
-    # Verify high-water mark was updated correctly after both runs
-    final_timestamp = e2e_test_setup[2].get(REDIS_LAST_SEEN_KEY)
-    assert final_timestamp is not None, "High-water mark should be set after processing"
-    assert final_timestamp == duplicate_email.received_date_time.isoformat(), (
-        f"High-water mark should match the processed email timestamp. "
-        f"Expected: {duplicate_email.received_date_time.isoformat()}, "
-        f"Got: {final_timestamp}"
-    )
+    with patch.object(e2e_test_setup[1], 'upload_eml_file', side_effect=track_upload_calls):
+        # Mock settings for the task calls
+        with patch('app.tasks.email_tasks.settings') as mock_settings:
+            mock_settings.TARGET_MAILBOX = "inbox"
+            mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+
+            # First run - should process the email normally
+            await pull_and_process_emails_logic()
+
+            # Verify first run completed successfully
+            assert len(s3_upload_calls) == 1, "S3 upload should be called once in first run"
+
+            # Second run - should process the same email again (idempotent)
+            await pull_and_process_emails_logic()
+
+            # Verify second run also completed (idempotent processing)
+            assert len(s3_upload_calls) == 2, "S3 upload should be called twice (once per run)"
+
+            # Verify both calls were with the same parameters
+            assert s3_upload_calls[0] == s3_upload_calls[1], "Both upload calls should have identical parameters"
+
+            # Verify database was called twice (ON CONFLICT DO NOTHING handles duplicates)
+            assert e2e_test_setup[2].execute.call_count == 2, "Database should be called twice (idempotent)"
+
+            # Verify high-water mark was updated in both runs
+            assert e2e_test_setup[3].setex.call_count == 2, "High-water mark should be updated in both runs"

@@ -63,8 +63,8 @@ class S3Client:
             self._aws_access_key_id = "test"
             self._aws_secret_access_key = "test"
         
-        logger.info("S3 client initialized successfully")
-
+            logger.info("S3 client initialized successfully")
+            
     async def _validate_s3_access(self) -> None:
         """
         Validates that the S3 client can access the configured bucket.
@@ -81,7 +81,7 @@ class S3Client:
                 endpoint_url=self._endpoint_url
             ) as s3_client:
                 await s3_client.head_bucket(Bucket=settings.S3_BUCKET_NAME)
-                logger.info("S3 bucket '%s' access validated successfully", settings.S3_BUCKET_NAME)
+            logger.info("S3 bucket '%s' access validated successfully", settings.S3_BUCKET_NAME)
         except ClientError as e:
             error_code: str = e.response.get("Error", {}).get("Code", "Unknown")
             logger.critical("S3 bucket validation failed: %s", error_code, exc_info=True)
@@ -104,8 +104,8 @@ class S3Client:
         if ".." in filename or "/" in filename:
             raise ValueError("Filename cannot contain path traversal characters")
         
-        # Check for valid S3 key characters (simplified)
-        if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+        # Check for valid S3 key characters (expanded)
+        if not re.match(r'^[a-zA-Z0-9._=\-]+$', filename):
             raise ValueError("Filename contains invalid characters")
         
         # Check length (S3 key limit is 1024 bytes)
@@ -150,13 +150,13 @@ class S3Client:
                 endpoint_url=self._endpoint_url
             ) as s3_client:
                 await s3_client.put_object(
-                    Bucket=bucket,
-                    Key=s3_object_key,
-                    Body=content,
-                    ContentType='message/rfc822' # Set the correct MIME type for .eml files
-                )
-                logger.info("Successfully uploaded '%s' to S3", s3_object_key)
-                return s3_object_key
+                Bucket=bucket,
+                Key=s3_object_key,
+                Body=content,
+                ContentType='message/rfc822' # Set the correct MIME type for .eml files
+            )
+            logger.info("Successfully uploaded '%s' to S3", s3_object_key)
+            return s3_object_key
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "Unknown")

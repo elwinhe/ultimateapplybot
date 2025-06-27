@@ -10,10 +10,11 @@ import httpx
 from typing import Optional
 
 from app.config import settings
+from app.services.postgres_client import store_refresh_token, get_refresh_token
 
 logger = logging.getLogger(__name__)
 
-# Define a Redis key for storing the user's refresh token
+# Redis key for storing refresh tokens
 REFRESH_TOKEN_KEY = f"user_refresh_token:{settings.TARGET_EXTERNAL_USER}"
 
 
@@ -45,8 +46,6 @@ class DelegatedGraphAuthenticator:
         """
         if not settings.CLIENT_ID:
             raise GraphAuthValidationError("CLIENT_ID is required")
-        if not settings.CLIENT_SECRET:
-            raise GraphAuthValidationError("CLIENT_SECRET is required for ConfidentialClientApplication")
         if not settings.REDIRECT_URI:
             raise GraphAuthValidationError("REDIRECT_URI is required")
         if not settings.TARGET_EXTERNAL_USER:
@@ -56,6 +55,9 @@ class DelegatedGraphAuthenticator:
         self._http_client = http_client
         self._token_url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
         self._auth_url = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+        
+        # Check if we're using a public client (no client secret) or confidential client
+        self._is_public_client = not settings.CLIENT_SECRET
         
         try:
             self._redis_client = redis.Redis.from_url(
@@ -114,31 +116,38 @@ class DelegatedGraphAuthenticator:
         token_data = {
             "grant_type": "authorization_code",
             "client_id": settings.CLIENT_ID,
-            "client_secret": settings.CLIENT_SECRET,
             "scope": "Mail.Read offline_access",
             "code": auth_code,
             "redirect_uri": settings.REDIRECT_URI,
         }
         
+        # Only include client_secret for confidential clients
+        if not self._is_public_client and settings.CLIENT_SECRET:
+            token_data["client_secret"] = settings.CLIENT_SECRET
+        
         try:
+            logger.debug("Exchanging auth code for token", extra={"is_public_client": self._is_public_client})
             response = await self._http_client.post(self._token_url, data=token_data)
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:
                 logger.error("HTTP error exchanging auth code for token: %s", e.response.text, exc_info=True)
                 raise GraphAuthTokenError(f"Failed to exchange authorization code for token: {e.response.text}") from e
-            result = await response.json()
+            
+            result = response.json()
+            logger.debug("Token response received", extra={"response_keys": list(result.keys())})
             
             if "error" in result:
-                logger.error("Token acquisition failed", extra={"error": result.get("error")})
+                logger.error("Token acquisition failed", extra={"error": result.get("error"), "error_description": result.get("error_description")})
                 raise GraphAuthTokenError(result.get("error_description", "Unknown token error"))
             
             refresh_token = result.get("refresh_token")
             if not refresh_token:
+                logger.error("No refresh token in response", extra={"response_keys": list(result.keys())})
                 raise GraphAuthTokenError("No refresh token returned. Ensure 'offline_access' scope is granted.")
 
-            # Store the refresh token in Redis
-            self._redis_client.set(REFRESH_TOKEN_KEY, refresh_token)
+            # Store the refresh token in Postgres
+            await store_refresh_token(settings.TARGET_EXTERNAL_USER, refresh_token)
             logger.info(
                 "Successfully acquired and stored refresh token", 
                 extra={"user": settings.TARGET_EXTERNAL_USER}
@@ -148,17 +157,17 @@ class DelegatedGraphAuthenticator:
             # Re-raise our specific exceptions
             raise
         except Exception as e:
-            logger.error("Unexpected error during token acquisition", extra={"error": str(e)})
+            logger.error("Unexpected error during token acquisition", extra={"error": str(e), "error_type": type(e).__name__}, exc_info=True)
             raise GraphAuthError("Failed to acquire authentication tokens") from e
 
     async def get_access_token_for_user(self) -> str:
         """
         Asynchronously acquires a new access token using a stored refresh token.
         This is the method the background task will call.
-        
+
         Returns:
             The access token for Microsoft Graph API
-            
+
         Raises:
             GraphAuthTokenError: If no refresh token is found or refresh fails
             GraphAuthError: For other authentication errors
@@ -167,7 +176,7 @@ class DelegatedGraphAuthenticator:
             raise GraphAuthError("HTTP client not available for async token acquisition")
         
         try:
-            refresh_token = self._redis_client.get(REFRESH_TOKEN_KEY)
+            refresh_token = await get_refresh_token(settings.TARGET_EXTERNAL_USER)
             if not refresh_token:
                 raise GraphAuthTokenError(
                     f"No refresh token found for user {settings.TARGET_EXTERNAL_USER}. "
@@ -177,10 +186,13 @@ class DelegatedGraphAuthenticator:
             token_data = {
                 "grant_type": "refresh_token",
                 "client_id": settings.CLIENT_ID,
-                "client_secret": settings.CLIENT_SECRET,
                 "scope": "Mail.Read",
                 "refresh_token": refresh_token,
             }
+            
+            # Only include client_secret for confidential clients
+            if not self._is_public_client and settings.CLIENT_SECRET:
+                token_data["client_secret"] = settings.CLIENT_SECRET
             
             response = await self._http_client.post(self._token_url, data=token_data)
             try:
@@ -188,23 +200,24 @@ class DelegatedGraphAuthenticator:
             except httpx.HTTPStatusError as e:
                 logger.error("HTTP error refreshing token: %s", e.response.text, exc_info=True)
                 raise GraphAuthTokenError(f"Failed to acquire token via refresh token: {e.response.text}") from e
-            result = await response.json()
+            
+            result = response.json()
+            
+            # Store new refresh token if one is returned (Microsoft may rotate tokens)
+            if "refresh_token" in result:
+                await store_refresh_token(settings.TARGET_EXTERNAL_USER, result["refresh_token"])
+                logger.debug("Stored new refresh token from token refresh")
             
             if "access_token" not in result:
                 logger.error("Token refresh failed", extra={"error": result.get("error")})
                 raise GraphAuthTokenError(result.get("error_description", "Unknown refresh error"))
                 
-            # If a new refresh token is issued, update it in storage
-            if "refresh_token" in result:
-                self._redis_client.set(REFRESH_TOKEN_KEY, result["refresh_token"])
-                logger.info("Updated refresh token in storage")
-            
             logger.debug("Successfully acquired access token")
             return result["access_token"]
-            
+
         except (GraphAuthTokenError, GraphAuthError):
             # Re-raise our specific exceptions
             raise
         except Exception as e:
-            logger.error("Unexpected error during token refresh", extra={"error": str(e)})
+            logger.error("Unexpected error during token retrieval", exc_info=True)
             raise GraphAuthError("Failed to refresh access token") from e

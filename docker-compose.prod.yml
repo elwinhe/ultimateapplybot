@@ -15,6 +15,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: api-runtime
+    command: celery -A app.celery_app.celery worker --loglevel=info --pool=prefork -c 4
     env_file: .env.production
     
   beat:

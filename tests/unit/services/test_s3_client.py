@@ -24,7 +24,17 @@ def test_s3_client_initialization_success():
     """
     with mock_aws():
         s3_conn = boto3.client("s3", region_name=settings.AWS_REGION)
-        s3_conn.create_bucket(Bucket=settings.S3_BUCKET_NAME)
+        try:
+            if settings.AWS_REGION != "us-east-1":
+                s3_conn.create_bucket(
+                    Bucket=settings.S3_BUCKET_NAME,
+                    CreateBucketConfiguration={'LocationConstraint': settings.AWS_REGION}
+                )
+            else:
+                s3_conn.create_bucket(Bucket=settings.S3_BUCKET_NAME)
+        except s3_conn.exceptions.BucketAlreadyExists:
+            pass  # It's okay if it already exists from a previous run
+            
         try:
             S3Client()
         except S3ValidationError:

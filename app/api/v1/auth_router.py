@@ -12,6 +12,7 @@ import httpx
 
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
 from app.config import settings
+from app.services.postgres_client import store_refresh_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])

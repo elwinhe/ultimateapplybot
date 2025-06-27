@@ -20,12 +20,15 @@ logger = logging.getLogger(__name__)
 
 # --- Custom Typed Exceptions ---
 class GraphClientError(Exception):
+    """Base exception for GraphClient failures."""
     pass
 
 class GraphAPIFailedRequest(GraphClientError):
+    """Raised when the Microsoft Graph API returns an error status code."""
     pass
 
 class GraphClientAuthenticationError(GraphClientError):
+    """Raised when authentication fails."""
     pass
 
 
@@ -35,19 +38,35 @@ _GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 class GraphClient:
     """
     A high-level async client for Microsoft Graph email operations.
+
+    This client is designed for testability and robustness, using an injected
+    HTTP client. It supports delegated authentication flow.
     """
     _http_client: httpx.AsyncClient
     _authenticator: DelegatedGraphAuthenticator
 
     def __init__(self, http_client: httpx.AsyncClient) -> None:
-        """Initializes the GraphClient with a shared HTTP client."""
+        """
+        Initializes the GraphClient with an HTTP client.
+
+        Args:
+            http_client: An httpx.AsyncClient for making requests. Reusing the
+                         client improves performance.
+        """
         self._http_client = http_client
-        # This client is now specifically for the delegated flow
-        self._authenticator = DelegatedGraphAuthenticator(http_client)
-        logger.info("GraphClient initialized for delegated authentication.")
+        self._authenticator = DelegatedGraphAuthenticator(http_client=http_client)
+        logger.info("GraphClient initialized for delegated authentication")
 
     async def _get_auth_headers(self) -> Dict[str, str]:
-        """Asynchronously acquires a token and formats it into authorization headers."""
+        """
+        Asynchronously acquires a token and formats it into authorization headers.
+        
+        Returns:
+            Dictionary containing Authorization header with Bearer token.
+            
+        Raises:
+            GraphClientAuthenticationError: If authentication fails.
+        """
         logger.debug("Acquiring access token for Graph API call...")
         try:
             token = await self._authenticator.get_access_token_for_user()
@@ -59,16 +78,14 @@ class GraphClient:
     async def fetch_messages(
         self,
         *,
-        mailbox: str = "me",
         top: int = 50,
         since: Optional[datetime] = None,
         select: Optional[Iterable[str]] = None,
     ) -> List[Email]:
         """
-        Fetches a list of email messages from a specified mailbox.
+        Fetches a list of email messages from the authenticated user's mailbox.
 
         Args:
-            mailbox: The user principal name or ID of the mailbox owner (default: "me" for delegated auth).
             top: The maximum number of messages to return (default: 50).
             since: If provided, fetches messages received after this timestamp.
             select: A list of specific fields to retrieve.
@@ -113,13 +130,12 @@ class GraphClient:
             logger.error("Unexpected error fetching messages: %s", str(e), exc_info=True)
             raise GraphClientError("An unexpected error occurred during message fetching") from e
 
-    async def fetch_eml_content(self, *, message_id: str, mailbox: str = "me") -> bytes:
+    async def fetch_eml_content(self, *, message_id: str) -> bytes:
         """
         Fetches the raw MIME content (.eml) of a single email message.
 
         Args:
             message_id: The unique identifier of the message.
-            mailbox: The user principal name or ID of the mailbox owner (default: "me" for delegated auth).
 
         Returns:
             The raw MIME content as bytes.

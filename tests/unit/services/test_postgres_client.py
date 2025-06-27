@@ -54,7 +54,10 @@ async def test_client_initialize_success(mock_asyncpg):
     # 3. Assert that the pool was created and the validation query was run
     mock_asyncpg.create_pool.assert_awaited_once()
     assert client._pool is not None
-    mock_connection.execute.assert_awaited_once_with("SELECT 1")
+    # Now we expect 5 calls: 1 for SELECT 1 + 4 for table creation (emails, attachments, archived_emails, auth_tokens)
+    assert mock_connection.execute.await_count == 5
+    # Verify the first call was the SELECT 1 validation
+    mock_connection.execute.assert_any_await("SELECT 1")
 
 
 @pytest.mark.asyncio
@@ -185,12 +188,12 @@ async def test_create_tables_success(initialized_client: PostgresClient):
     # 2. Call the method
     await initialized_client.create_tables()
 
-    # 3. Assert that all three table creation queries were executed
-    assert mock_connection.execute.await_count == 3
+    # 3. Assert that all four table creation queries were executed
+    assert mock_connection.execute.await_count == 4
     
     # Verify the calls were made (we can't easily check the exact SQL content due to formatting)
     calls = mock_connection.execute.await_args_list
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 @pytest.mark.asyncio

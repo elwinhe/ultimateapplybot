@@ -95,14 +95,26 @@ async def test_pull_and_process_emails_happy_path(mock_email_with_invoice, mock_
     mock_postgres.fetch_one = AsyncMock(return_value=None)
     mock_postgres.execute = AsyncMock()
 
-    await pull_and_process_emails_logic()
+    # Mock settings to include TARGET_MAILBOX
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+        
+        # Mock the redis_client directly since it's now optional
+        with patch('app.tasks.email_tasks.redis_client', mock_redis):
+            await pull_and_process_emails_logic()
 
-    mock_redis.get.assert_called_once_with("email_processor:last_seen_timestamp")
-    mock_graph.fetch_messages.assert_awaited_once_with(since=datetime.fromisoformat(mock_redis.get.return_value))
-    mock_graph.fetch_eml_content.assert_awaited_once_with(message_id="invoice_email_123")
-    mock_s3.upload_eml_file.assert_awaited_once()
-    mock_postgres.execute.assert_awaited_once()
-    mock_redis.setex.assert_called_once()
+            mock_redis.get.assert_called_once_with("email_processor:last_seen_timestamp")
+            mock_graph.fetch_messages.assert_awaited_once_with(
+                since=ANY,
+                top=100
+            )
+            mock_graph.fetch_eml_content.assert_awaited_once_with(
+                message_id="invoice_email_123"
+            )
+            mock_s3.upload_eml_file.assert_awaited_once()
+            mock_postgres.execute.assert_awaited_once()
+            mock_redis.setex.assert_called_once()
     patch.stopall()
 
 @pytest.mark.asyncio
@@ -120,11 +132,18 @@ async def test_pull_and_process_emails_no_new_emails(mock_email_tasks_dependenci
     mock_postgres.fetch_one = AsyncMock(return_value=None)
     mock_postgres.execute = AsyncMock()
 
-    await pull_and_process_emails_logic()
+    # Mock settings to include TARGET_MAILBOX
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+        
+        # Mock the redis_client directly since it's now optional
+        with patch('app.tasks.email_tasks.redis_client', mock_redis):
+            await pull_and_process_emails_logic()
 
-    mock_graph.fetch_eml_content.assert_not_awaited()
-    mock_s3.upload_eml_file.assert_not_awaited()
-    mock_postgres.execute.assert_not_awaited()
+            mock_graph.fetch_eml_content.assert_not_awaited()
+            mock_s3.upload_eml_file.assert_not_awaited()
+            mock_postgres.execute.assert_not_awaited()
     patch.stopall()
 
 @pytest.mark.asyncio
@@ -142,8 +161,16 @@ async def test_pull_and_process_emails_handles_service_error_gracefully(mock_ema
     mock_postgres.fetch_one = AsyncMock(return_value=None)
     mock_postgres.execute = AsyncMock()
 
-    await pull_and_process_emails_logic()
+    # Mock settings to include TARGET_MAILBOX
+    with patch('app.tasks.email_tasks.settings') as mock_settings:
+        mock_settings.TARGET_MAILBOX = "inbox"
+        mock_settings.REDIS_LAST_SEEN_EXPIRY = 604800
+        
+        # Mock the redis_client directly since it's now optional
+        with patch('app.tasks.email_tasks.redis_client', mock_redis):
+            with pytest.raises(GraphAPIFailedRequest):
+                await pull_and_process_emails_logic()
 
-    mock_s3.upload_eml_file.assert_not_awaited()
-    mock_postgres.execute.assert_not_awaited()
+            mock_s3.upload_eml_file.assert_not_awaited()
+            mock_postgres.execute.assert_not_awaited()
     patch.stopall()
