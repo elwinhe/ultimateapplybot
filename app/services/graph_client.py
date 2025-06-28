@@ -5,7 +5,7 @@ Service layer for interacting with the Microsoft Graph API.
 """
 from __future__ import annotations
 import logging
-from typing import Iterable, List, Optional, Dict
+from typing import Iterable, List, Optional, Dict, AsyncGenerator
 from datetime import datetime, timezone
 import httpx
 
@@ -47,8 +47,9 @@ class GraphClient:
     async def fetch_messages(
         self, *, user_id: str, top: int = 50, since: Optional[datetime] = None, select: Optional[Iterable[str]] = None
     ) -> List[Email]:
-        """Fetches email messages for a specific user."""
-        # Input validation
+        """
+        Fetches all pages of email messages for a specific user, handling pagination.
+        """
         if not user_id or not isinstance(user_id, str):
             raise GraphClientError("Invalid user_id provided")
         if not isinstance(top, int) or top < 1 or top > 1000:
@@ -63,22 +64,32 @@ class GraphClient:
         if select:
             params["$select"] = ",".join(select)
 
-        url = f"{_GRAPH_BASE_URL}/me/messages"
-        logger.info("Fetching messages for user %s with params: %s", user_id, params)
+        all_messages: List[Email] = []
+        next_url: Optional[str] = f"{_GRAPH_BASE_URL}/me/messages"
+        
+        logger.info("Fetching messages for user %s with initial params: %s", user_id, params)
         
         try:
             headers = await self._get_auth_headers(user_id)
-            response = await self._http_client.get(
-                url, 
-                headers=headers, 
-                params=params, 
-            )
-            response.raise_for_status()
             
-            raw_messages = response.json().get("value", [])
-            logger.info("Successfully fetched %d messages for user %s", len(raw_messages), user_id)
-            
-            return [Email.model_validate(m) for m in raw_messages]
+            while next_url:
+                response = await self._http_client.get(
+                    next_url, 
+                    headers=headers, 
+                    params=params if next_url == f"{_GRAPH_BASE_URL}/me/messages" else None,
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                raw_messages = data.get("value", [])
+                all_messages.extend([Email.model_validate(m) for m in raw_messages])
+                
+                next_url = data.get("@odata.nextLink")
+                if next_url:
+                    logger.info("Found nextLink, fetching next page for user %s...", user_id)
+
+            logger.info("Successfully fetched a total of %d messages for user %s", len(all_messages), user_id)
+            return all_messages
             
         except httpx.TimeoutException as e:
             logger.error("Timeout fetching messages for user %s: %s", user_id, str(e))

@@ -10,6 +10,7 @@ import asyncio
 import logging
 from datetime import datetime
 from dateutil.parser import isoparse
+from typing import Optional
 
 import httpx
 import redis
@@ -55,7 +56,6 @@ async def process_single_mailbox_logic(user_id: str):
     since = isoparse(last_seen_iso) if last_seen_iso else None
 
     async with httpx.AsyncClient(timeout=60.0) as http_client:
-        # The GraphClient now correctly handles auth internally
         graph_client = GraphClient(http_client=http_client)
         new_emails = await graph_client.fetch_messages(user_id=user_id, since=since, top=100)
 
@@ -69,6 +69,7 @@ async def process_single_mailbox_logic(user_id: str):
         for email in new_emails:
             if not should_process_email(email):
                 continue
+            
             try:
                 eml_content = await graph_client.fetch_eml_content(user_id=user_id, message_id=email.id)
                 filename = f"{email.id}.eml"
@@ -86,7 +87,6 @@ async def process_single_mailbox_logic(user_id: str):
                     [addr.address for addr in email.to_addresses],
                     s3_key
                 )
-                
                 processed_count += 1
                 logger.info("Successfully processed email %s for user %s", email.id, user_id)
             except (GraphClientError, S3UploadError, PostgresClientError) as e:
@@ -96,15 +96,13 @@ async def process_single_mailbox_logic(user_id: str):
         
         logger.info("Processed %d emails for user %s", processed_count, user_id)
         
-        # Only update the timestamp if the batch was fully successful and something was processed.
-        if not batch_had_errors and processed_count > 0:
+        # Only update the timestamp if the batch was fully successful.
+        if not batch_had_errors:
             newest_timestamp = new_emails[0].received_date_time.isoformat()
             redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp)
             logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp)
-        elif batch_had_errors:
-            logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
         else:
-            logger.info("No relevant emails were processed for user %s. High-water mark not updated.", user_id)
+            logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
 
 # Synchronous Celery Worker Task 
 @celery.task(name="process-single-mailbox", bind=True, max_retries=3)
