@@ -74,9 +74,19 @@ async def process_single_mailbox_logic(user_id: str):
                 filename = f"{email.id}.eml"
                 s3_key = await s3_client.upload_eml_file(filename=filename, content=eml_content)
                 await postgres_client.execute(
-                    "INSERT INTO archived_emails (message_id, subject, s3_key) VALUES ($1, $2, $3) ON CONFLICT (message_id) DO NOTHING;",
-                    email.id, email.subject, s3_key
+                    """
+                    INSERT INTO archived_emails (message_id, subject, received_date_time, from_address, to_addresses, s3_key)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (message_id) DO NOTHING;
+                    """,
+                    email.id,
+                    email.subject,
+                    email.received_date_time,
+                    email.from_address.address if email.from_address else None,
+                    [addr.address for addr in email.to_addresses],
+                    s3_key
                 )
+                
                 processed_count += 1
                 logger.info("Successfully processed email %s for user %s", email.id, user_id)
             except (GraphClientError, S3UploadError, PostgresClientError) as e:
