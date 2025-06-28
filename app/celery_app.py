@@ -67,7 +67,7 @@ celery.conf.update(
     beat_schedule={
         'dispatch-email-processing-every-15-minutes': {
             'task': 'dispatch-email-processing',
-            'schedule': 60.0, # 900 seconds = 15 minutes
+            'schedule': 900.0, # 900 seconds = 15 minutes
             'options': {'queue': 'email_processing'},
         },
     },
