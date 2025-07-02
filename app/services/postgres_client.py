@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
+from datetime import datetime
 
 import asyncpg
 from asyncpg import Connection, Pool
@@ -33,10 +34,10 @@ class PostgresClient:
     Handles all interactions with the PostgreSQL database.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_url: str) -> None:
         """Initializes the PostgreSQL client."""
         self._pool: Optional[Pool] = None
-        self._connection_string: str = settings.DATABASE_URL
+        self._connection_string: str = db_url
 
     async def initialize(self) -> None:
         """Initialize the connection pool and create tables."""
@@ -103,6 +104,9 @@ class PostgresClient:
         CREATE TABLE IF NOT EXISTS archived_emails (
             message_id VARCHAR(255) PRIMARY KEY,
             subject TEXT,
+            received_date_time TIMESTAMPTZ,
+            from_address VARCHAR(255),
+            to_addresses TEXT[],
             s3_key VARCHAR(1024) NOT NULL,
             archived_at TIMESTAMPTZ DEFAULT NOW()
         );
@@ -123,7 +127,7 @@ class PostgresClient:
             raise PostgresClientError("Failed to create database tables") from e
 
 # Singleton instance
-postgres_client = PostgresClient()
+postgres_client = PostgresClient(db_url=settings.DATABASE_URL)
 
 # Token Storage Functions
 async def store_refresh_token(user_id: str, refresh_token: str):

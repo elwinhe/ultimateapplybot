@@ -65,28 +65,32 @@ class GraphClient:
             params["$select"] = ",".join(select)
 
         all_messages: List[Email] = []
-        next_url: Optional[str] = f"{_GRAPH_BASE_URL}/me/messages"
+        url: str = f"{_GRAPH_BASE_URL}/me/messages"
         
         logger.info("Fetching messages for user %s with initial params: %s", user_id, params)
         
         try:
             headers = await self._get_auth_headers(user_id)
             
+            # Initial request
+            response = await self._http_client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            raw_messages = data.get("value", [])
+            all_messages.extend([Email.model_validate(m) for m in raw_messages])
+            
+            # Paginate
+            next_url = data.get("@odata.nextLink")
             while next_url:
-                response = await self._http_client.get(
-                    next_url, 
-                    headers=headers, 
-                    params=params if next_url == f"{_GRAPH_BASE_URL}/me/messages" else None,
-                )
+                logger.info("Found nextLink, fetching next page for user %s...", user_id)
+                response = await self._http_client.get(next_url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 
                 raw_messages = data.get("value", [])
                 all_messages.extend([Email.model_validate(m) for m in raw_messages])
-                
                 next_url = data.get("@odata.nextLink")
-                if next_url:
-                    logger.info("Found nextLink, fetching next page for user %s...", user_id)
 
             logger.info("Successfully fetched a total of %d messages for user %s", len(all_messages), user_id)
             return all_messages

@@ -16,29 +16,33 @@ from collections.abc import AsyncGenerator
 # Import the client AND the helper functions to be tested
 from app.services.postgres_client import PostgresClient, store_refresh_token, get_refresh_token
 import app.services.postgres_client as pg_mod
+from app.config import Settings
 
 @pytest_asyncio.fixture
 async def live_postgres_client() -> AsyncGenerator[PostgresClient, None]:
     """
-    Provides an initialized PostgresClient connected to the local PostgreSQL container.
-    It also ensures the database tables are clean before each test.
+    Provides an initialized PostgresClient connected to the dedicated test database,
+    using the application's central configuration mechanism.
     """
-    # 1. Create and initialize a new client instance.
-    client = PostgresClient()
+    # 1. Create a new Settings object within the test context.
+    # This will load environment variables set by the test-runner service.
+    test_settings = Settings()
+
+    # 2. Create and initialize a new client instance pointed at the test DB.
+    client = PostgresClient(db_url=test_settings.DATABASE_URL)
     await client.initialize()
 
-    # 2. Create tables if they don't exist
+    # 3. Create tables if they don't exist in the test DB.
     await client.create_tables()
 
-    # 3. Before yielding the client to the test, clean the tables.
-    # Patch the singleton's pool using the module reference
-    pg_mod.postgres_client._pool = client._pool
+    # 4. Before yielding the client, clean the tables.
+    pg_mod.postgres_client = client
     await client.execute("TRUNCATE TABLE archived_emails, auth_tokens RESTART IDENTITY CASCADE;")
     
-    # 4. Yield the client to the test function
+    # 5. Yield the client to the test function
     yield client
 
-    # 5. After the test completes, close the client's connection pool
+    # 6. After the test completes, close the client's connection pool.
     await client.close()
 
 @pytest.mark.asyncio

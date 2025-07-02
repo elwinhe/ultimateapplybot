@@ -50,7 +50,7 @@ async def test_client_initialize_success(mock_asyncpg):
     mock_connection.execute = AsyncMock()
 
     # 2. Instantiate and initialize the client
-    client = PostgresClient()
+    client = PostgresClient(db_url="mock_db_url")
     await client.initialize()
 
     # 3. Assert that the pool was created and tables were created
@@ -69,7 +69,7 @@ async def test_client_initialize_failure(mock_asyncpg):
     mock_asyncpg.create_pool = AsyncMock(side_effect=OSError("Connection refused"))
 
     # 2. Assert that the correct exception is raised
-    client = PostgresClient()
+    client = PostgresClient(db_url="mock_db_url")
     with pytest.raises(PostgresConnectionError, match="Could not establish connection"):
         await client.initialize()
 
@@ -89,7 +89,7 @@ async def initialized_client(mock_asyncpg) -> PostgresClient:
     mock_pool.acquire.return_value = mock_acquire_cm
     mock_connection.execute = AsyncMock()
     
-    client = PostgresClient()
+    client = PostgresClient(db_url="mock_db_url")
     await client.initialize()
     return client
 
@@ -186,7 +186,7 @@ async def test_operation_fails_when_pool_is_not_initialized():
     """
     Tests that an error is raised if an operation is attempted before initialization.
     """
-    client = PostgresClient() # Not initialized
+    client = PostgresClient(db_url="mock_db_url") # Not initialized
     with pytest.raises(PostgresConnectionError, match="Connection pool not initialized"):
         await client.execute("SELECT 1;")
 

@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
 from dateutil.parser import isoparse
-from typing import Optional
 
 import httpx
 import redis
@@ -59,14 +57,21 @@ async def process_single_mailbox_logic(user_id: str):
         graph_client = GraphClient(http_client=http_client)
         new_emails = await graph_client.fetch_messages(user_id=user_id, since=since, top=100)
 
-        if not new_emails:
-            logger.info("No new emails found for user %s", user_id)
+        # Defensively filter out any emails that the API may have returned with a timestamp
+        # equal to our 'since' parameter, which can happen due to timestamp precision issues.
+        if since:
+            truly_new_emails = [e for e in new_emails if e.received_date_time > since]
+        else:
+            truly_new_emails = new_emails
+
+        if not truly_new_emails:
+            logger.info("No new emails found for user %s after defensive filtering.", user_id)
             return
 
         batch_had_errors = False
         processed_count = 0
         
-        for email in new_emails:
+        for email in truly_new_emails:
             if not should_process_email(email):
                 continue
             
@@ -98,9 +103,9 @@ async def process_single_mailbox_logic(user_id: str):
         
         # Only update the timestamp if the batch was fully successful.
         if not batch_had_errors:
-            newest_timestamp = new_emails[0].received_date_time.isoformat()
-            redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp)
-            logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp)
+            newest_timestamp_iso = truly_new_emails[0].received_date_time.isoformat()
+            redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp_iso)
+            logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp_iso)
         else:
             logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
 

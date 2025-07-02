@@ -1,8 +1,6 @@
 """
 tests/unit/services/test_s3_client.py
 
-WARNING: These async S3 tests use a real S3 bucket and require 
-valid AWS credentials and a test bucket.
 """
 from __future__ import annotations
 
@@ -14,48 +12,28 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 # Import the client and its exceptions for testing
-from app.services.s3_client import S3Client, S3UploadError, S3ValidationError
+from app.services.s3_client import S3Client, S3UploadError, S3ValidationError, s3_client as global_s3_client
 from app.config import settings
 
 
+@mock_aws
 def test_s3_client_initialization_success():
     """
-    Tests that the S3Client initializes successfully when the bucket exists.
+    Tests that the S3Client initializes successfully.
+    The actual bucket validation happens on the first call, not during init.
     """
-    with mock_aws():
-        s3_conn = boto3.client("s3", region_name=settings.AWS_REGION)
-        try:
-            if settings.AWS_REGION != "us-east-1":
-                s3_conn.create_bucket(
-                    Bucket=settings.S3_BUCKET_NAME,
-                    CreateBucketConfiguration={'LocationConstraint': settings.AWS_REGION}
-                )
-            else:
-                s3_conn.create_bucket(Bucket=settings.S3_BUCKET_NAME)
-        except (s3_conn.exceptions.BucketAlreadyExists, s3_conn.exceptions.BucketAlreadyOwnedByYou):
-            pass  # It's okay if it already exists from a previous run
-            
-        try:
-            S3Client()
-        except S3ValidationError:
-            pytest.fail("S3Client initialization failed when it should have succeeded.")
+    # This test now simply ensures the client can be instantiated
+    # without any immediate errors.
+    client = S3Client()
+    assert client is not None
 
 
-def test_s3_client_initialization_fails_if_bucket_not_found():
-    """
-    Tests that S3ValidationError is raised if the configured bucket does not exist.
-    Note: With aioboto3, validation happens during async operations, not during init.
-    """
-    with mock_aws():
-        client = S3Client()
-        assert client is not None  # Client should initialize successfully
-
-
+@mock_aws
 def test_validate_filename_rejects_unsafe_names():
     """
     Tests that the private filename validation method rejects unsafe inputs.
     """
-    client = S3Client() # Assuming initialization is mocked or successful
+    client = S3Client()
     
     with pytest.raises(ValueError, match="path traversal"):
         client._validate_filename("../secret.txt")
@@ -75,13 +53,24 @@ async def test_upload_eml_file_success():
     s3_client = S3Client()
     file_content = b"From: test\nSubject: Hello"
     filename = "test-message-id-123.eml"
-    s3_key = await s3_client.upload_eml_file(filename=filename, content=file_content)
-    assert s3_key == f"emails/{filename}"
-    s3_conn = boto3.client("s3", region_name=settings.AWS_REGION)
-    s3_object = s3_conn.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
-    assert s3_object["Body"].read() == file_content
-    assert s3_object["ContentType"] == 'message/rfc822'
-    s3_conn.delete_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
+
+    with patch.object(s3_client, '_session') as mock_session:
+        mock_aio_client = AsyncMock()
+        mock_aio_client.put_object = AsyncMock()
+        mock_session.client.return_value.__aenter__.return_value = mock_aio_client
+        
+        s3_key = await s3_client.upload_eml_file(filename=filename, content=file_content)
+
+        # Assert that the correct key was returned
+        assert s3_key == f"emails/{filename}"
+        
+        # Assert that the underlying client was called with the correct parameters
+        mock_aio_client.put_object.assert_awaited_once_with(
+            Bucket=settings.S3_BUCKET_NAME,
+            Key=f"emails/{filename}",
+            Body=file_content,
+            ContentType='message/rfc822'
+        )
 
 
 @pytest.mark.asyncio
@@ -102,11 +91,33 @@ async def test_upload_eml_file_raises_upload_error_on_client_error():
     s3_client = S3Client()
     with patch.object(s3_client._session, 'client') as mock_client:
         mock_s3_client = AsyncMock()
-        mock_s3_client.put_object = AsyncMock(
-            side_effect=ClientError({'Error': {'Code': 'AccessDenied', 'Message': 'Access Denied'}}, 'put_object')
+        mock_s3_guts = mock_s3_client.__aenter__.return_value
+        mock_s3_guts.put_object.side_effect = ClientError(
+            {'Error': {'Code': 'AccessDenied', 'Message': 'Access Denied'}},
+            'PutObject'
         )
-        mock_client.return_value.__aenter__.return_value = mock_s3_client
+        mock_client.return_value = mock_s3_client
+
         with pytest.raises(S3UploadError, match="AccessDenied"):
+            await s3_client.upload_eml_file(filename="test.eml", content=b"test")
+
+
+@pytest.mark.asyncio
+async def test_upload_eml_fails_if_bucket_not_found():
+    """
+    Tests that S3UploadError is raised if the bucket does not exist.
+    """
+    s3_client = S3Client()
+    # Patch the client to simulate a NoSuchBucket error
+    with patch.object(s3_client, '_session') as mock_session:
+        mock_aio_client = AsyncMock()
+        mock_aio_client.put_object.side_effect = ClientError(
+            {'Error': {'Code': 'NoSuchBucket', 'Message': 'The specified bucket does not exist'}},
+            'PutObject'
+        )
+        mock_session.client.return_value.__aenter__.return_value = mock_aio_client
+
+        with pytest.raises(S3UploadError, match="NoSuchBucket"):
             await s3_client.upload_eml_file(filename="test.eml", content=b"test")
 
 
