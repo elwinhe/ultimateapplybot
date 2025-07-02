@@ -29,7 +29,7 @@ The application is designed with a clean separation of concerns, dividing logic 
 - **Persistent Authentication**: OAuth2 refresh tokens are stored in the database, allowing the application to maintain long-term access without requiring repeated user logins.
 - **Concurrent Processing**: Background jobs are designed with a "fan-out" pattern, allowing multiple emails from different users to be processed in parallel for high throughput.
 - **Idempotent Processing**: Redis is used as a cache to store the timestamp of the last processed email, preventing the system from fetching and processing the same emails multiple times.
-- **Periodic Scheduling**: A Celery Beat task runs on a configurable schedule (e.g., every 15 minutes) to automatically trigger the email processing workflow.
+- **Periodic Scheduling**: A Celery Beat task runs on a configurable schedule (e.g., every 15 minutes) to automatically trigger the email processing workflow, uses paging to ensure all emails are processed up to the timestamp recorded in the cache, which updates to the timestamp of the last processed email from the previous batch
 
 ## Getting Started (Local Development)
 
@@ -41,11 +41,10 @@ This setup runs all services locally using Docker containers, including a mock S
 
 ### 1. Setup Environment File
 
-Create a `.env` file in the project root. For local development, you should define the following to use the local mock S3 service and the Dockerized Postgres database:
+Create a `.env` file in the project root, let me know if you want the exact API key configuration:
 
 ```
-S3_ENDPOINT_URL=http://localhost:5002
-DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader_db
+DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader-new
 ```
 
 ### 2. Run the Development Stack
@@ -123,7 +122,8 @@ To run a test against your live AWS S3 bucket or RDS instance (use with caution)
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml run --rm test-runner pytest tests/integration/test_s3_upload.py
 ```
 
-### Notes
-- right now upon every new build, the session authentication token is wiped.
-- upon every new build, all emails will be processed again
+### Notes for future improvement
+- Configure Callback url to a dashboard to allows for users to toggle email processing.
+- Callback webpage should also have users add a mandatory start date and customizable filters, giving them control to what can br processed.
+
 
