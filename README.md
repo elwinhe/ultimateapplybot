@@ -41,11 +41,10 @@ This setup runs all services locally using Docker containers, including a mock S
 
 ### 1. Setup Environment File
 
-Create a `.env` file in the project root. For local development, you should define the following to use the local mock S3 service and the Dockerized Postgres database:
+Create a `.env` file in the project root, let me know if you want the exact API key configuration:
 
 ```
-S3_ENDPOINT_URL=http://localhost:5002
-DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader_db
+DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader-new
 ```
 
 ### 2. Run the Development Stack
