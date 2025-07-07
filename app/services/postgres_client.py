@@ -98,8 +98,6 @@ class PostgresClient:
 
     async def create_tables(self) -> None:
         """Create necessary database tables if they don't exist."""
-        # --- SIMPLIFIED SCHEMA ---
-        # This table now only contains the columns the application actually uses.
         create_archived_emails_table = """
         CREATE TABLE IF NOT EXISTS archived_emails (
             message_id VARCHAR(255) PRIMARY KEY,

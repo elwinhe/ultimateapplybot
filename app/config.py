@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
 
     # Celery Configuration
-    CELERY_SECRET_KEY: str | None = None
+    CELERY_SECURITY_KEY: str | None = None
 
 # Create a single, importable instance for the rest of the application to use.
 settings = Settings()
