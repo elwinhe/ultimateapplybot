@@ -41,11 +41,7 @@ This setup runs all services locally using Docker containers, including a mock S
 
 ### 1. Setup Environment File
 
-Create a `.env` file in the project root, let me know if you want the exact API key configuration:
-
-```
-DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader-new
-```
+Create a `.env` file in the project root with the file I sent you through email
 
 ### 2. Run the Development Stack
 
