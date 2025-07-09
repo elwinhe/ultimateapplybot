@@ -1,6 +1,6 @@
 # Elwin's Trial Project: Outlook Email Scanner + Forwarder
 
-This project is a robust, production-ready application designed to read and filter emails from Microsoft Outlook accounts, process them based on specific criteria, and archive them as `.eml` files in an S3 bucket, along with a reference to the S3 in the metadata saved in postgres. It is built with a scalable, multi-user architecture using FastAPI for the API layer and Celery for background task processing.
+This project is a robust, production-ready application designed to read and filter emails from Microsoft Outlook accounts, process them based on specific criteria, and archive them as `.eml` files in an S3 bucket, along with a reference to the S3 in the metadata saved in postgres. It is built with a scalable, multi-user architecture using FastAPI for the API layer and Celery for background task processing. It follows a clean architecture approach to allow for easier testing, scaling, and maintainability 
 
 Video demo link: https://drive.google.com/file/d/1MTiT8AQjYtRn__-WnzXF9pSh8hrT5fQp/view?usp=sharing
 
@@ -118,7 +118,7 @@ To run a test against your live AWS S3 bucket or RDS instance (use with caution)
 docker-compose -f docker-compose.yml -f docker-compose.prod.yml run --rm test-runner pytest tests/integration/test_s3_upload.py
 ```
 
-### Notes for future improvement
+### Future Ideas
 - Configure Callback url to a dashboard to allows for users to toggle email processing.
 - Callback webpage should also have users add a mandatory start date and customizable filters, giving them control to what can br processed.
 
