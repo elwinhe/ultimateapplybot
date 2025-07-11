@@ -10,10 +10,12 @@ from typing import List, Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
+from fastapi.responses import JSONResponse
 
 from app.models.email import Email
 from app.services.graph_client import (GraphAPIFailedRequest, GraphClient, GraphClientError)
 from app.config import settings
+from app.celery_app import celery
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,55 @@ async def get_current_user_id(
 
 
 # API Endpoint Definition 
+@router.post("/process")
+async def trigger_email_processing():
+    """
+    Trigger email processing for all authenticated users.
+    This dispatches the multi-user email processing task via Celery.
+    """
+    try:
+        logger.info("Triggering multi-user email processing via Celery...")
+        # Dispatch the multi-user email processing task
+        task = celery.send_task('app.tasks.email_tasks.dispatch_email_processing')
+        return JSONResponse(
+            status_code=202,  # Accepted
+            content={
+                "message": "Email processing dispatched successfully",
+                "task_id": task.id,
+                "status": "processing"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to dispatch email processing: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to dispatch email processing: {str(e)}"
+        )
+
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """
+    Get the status of a Celery task.
+    """
+    try:
+        task_result = celery.AsyncResult(task_id)
+        return JSONResponse(
+            status_code=200,
+            content={
+                "task_id": task_id,
+                "status": task_result.status,
+                "result": task_result.result if task_result.ready() else None
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to get task status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get task status: {str(e)}"
+        )
+
+
 @router.get(
     "/me",
     response_model=List[Email],
