@@ -44,70 +44,76 @@ class GraphClient:
             logger.error("Authentication failed for user %s: %s", user_id, str(e))
             raise GraphClientAuthenticationError(f"Could not authenticate for user {user_id}") from e
 
-    async def fetch_messages(
-        self, *, user_id: str, top: int = 50, since: Optional[datetime] = None, select: Optional[Iterable[str]] = None
-    ) -> List[Email]:
-        """
-        Fetches all pages of email messages for a specific user, handling pagination.
-        """
+    async def _stream_messages(
+        self,
+        *,
+        user_id: str,
+        top: int,
+        since: Optional[datetime],
+        select: Optional[Iterable[str]],
+    ) -> AsyncGenerator[Email, None]:
         if not user_id or not isinstance(user_id, str):
             raise GraphClientError("Invalid user_id provided")
         if not isinstance(top, int) or top < 1 or top > 1000:
             raise GraphClientError("Invalid top parameter: must be between 1 and 1000")
         if since and not isinstance(since, datetime):
             raise GraphClientError("Invalid since parameter: must be a datetime object")
-            
+
         params: dict[str, str | int] = {"$top": top, "$orderby": "receivedDateTime DESC"}
         if since:
-            since_str = since.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            since_str = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             params["$filter"] = f"receivedDateTime gt {since_str}"
         if select:
             params["$select"] = ",".join(select)
 
-        all_messages: List[Email] = []
-        url: str = f"{_GRAPH_BASE_URL}/me/messages"
-        
-        logger.info("Fetching messages for user %s with initial params: %s", user_id, params)
-        
+        url: str | None = f"{_GRAPH_BASE_URL}/me/messages"
+        is_initial_request = True
+
+        logger.info("Streaming messages for user %s with initial params: %s", user_id, params)
+
         try:
             headers = await self._get_auth_headers(user_id)
-            
-            # Initial request
-            response = await self._http_client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            raw_messages = data.get("value", [])
-            all_messages.extend([Email.model_validate(m) for m in raw_messages])
-            
-            # Paginate
-            next_url = data.get("@odata.nextLink")
-            while next_url:
-                logger.info("Found nextLink, fetching next page for user %s...", user_id)
-                response = await self._http_client.get(next_url, headers=headers)
+            while url:
+                request_params = params if is_initial_request else None
+                response = await self._http_client.get(url, headers=headers, params=request_params)
                 response.raise_for_status()
                 data = response.json()
-                
-                raw_messages = data.get("value", [])
-                all_messages.extend([Email.model_validate(m) for m in raw_messages])
-                next_url = data.get("@odata.nextLink")
 
-            logger.info("Successfully fetched a total of %d messages for user %s", len(all_messages), user_id)
-            return all_messages
-            
+                for raw_message in data.get("value", []):
+                    yield Email.model_validate(raw_message)
+
+                url = data.get("@odata.nextLink")
+                is_initial_request = False
+
         except httpx.TimeoutException as e:
             logger.error("Timeout fetching messages for user %s: %s", user_id, str(e))
             raise GraphClientError(f"Request timeout for user {user_id}") from e
         except httpx.HTTPStatusError as e:
-            logger.error("HTTP error fetching messages for user %s: %s - %s", 
-                        user_id, e.response.status_code, e.response.text)
+            logger.error(
+                "HTTP error fetching messages for user %s: %s - %s",
+                user_id,
+                e.response.status_code,
+                e.response.text,
+            )
             raise GraphAPIFailedRequest(f"Graph API returned status {e.response.status_code}") from e
         except GraphClientAuthenticationError:
-            # Re-raise authentication errors as-is
             raise
         except Exception as e:
             logger.error("Unexpected error fetching messages for user %s: %s", user_id, str(e), exc_info=True)
             raise GraphClientError("An unexpected error occurred during message fetching") from e
+
+    async def fetch_messages(
+        self, *, user_id: str, top: int = 50, since: Optional[datetime] = None, select: Optional[Iterable[str]] = None
+    ) -> List[Email]:
+        """
+        Fetches all pages of email messages for a specific user, handling pagination.
+        """
+        return [
+            email
+            async for email in self._stream_messages(
+                user_id=user_id, top=top, since=since, select=select
+            )
+        ]
 
     async def fetch_eml_content(self, *, user_id: str, message_id: str) -> bytes:
         """Fetches the raw .eml content of a single email message for a specific user."""

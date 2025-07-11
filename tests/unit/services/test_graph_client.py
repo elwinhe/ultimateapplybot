@@ -33,12 +33,27 @@ def mock_http_client():
     return AsyncMock(spec=httpx.AsyncClient)
 
 @pytest.mark.asyncio
-async def test_fetch_messages_success(mock_authenticator, mock_http_client):
-    """Returns parsed emails for a valid user."""
-    mock_response = AsyncMock()
-    mock_response.json = Mock(return_value={"value": [{"id": "1", "subject": "Test", "receivedDateTime": datetime.now(timezone.utc).isoformat(), "body": {"contentType": "text", "content": "..."}, "from": {"emailAddress": {"name": "A", "address": "a@example.com"}}, "toRecipients": [{"emailAddress": {"name": "B", "address": "b@example.com"}}], "ccRecipients": [], "bccRecipients": [], "hasAttachments": False}]})
-    mock_response.raise_for_status = Mock(return_value=None)
+async def test_fetch_messages_single_page(mock_authenticator, mock_http_client):
+    """Returns parsed emails for a valid user from a single page of results."""
+    mock_response = AsyncMock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "value": [
+            {
+                "id": "1",
+                "subject": "Test",
+                "receivedDateTime": datetime.now(timezone.utc).isoformat(),
+                "body": {"contentType": "text", "content": "..."},
+                "from": {"emailAddress": {"name": "A", "address": "a@example.com"}},
+                "toRecipients": [{"emailAddress": {"name": "B", "address": "b@example.com"}}],
+                "ccRecipients": [],
+                "bccRecipients": [],
+                "hasAttachments": False,
+            }
+        ]
+    }
+    mock_response.raise_for_status.return_value = None
     mock_http_client.get.return_value = mock_response
+
     with patch('app.services.graph_client.DelegatedGraphAuthenticator', return_value=mock_authenticator):
         client = GraphClient(http_client=mock_http_client)
         emails = await client.fetch_messages(user_id=TEST_USER_ID)
@@ -46,6 +61,59 @@ async def test_fetch_messages_success(mock_authenticator, mock_http_client):
         assert emails[0].id == "1"
         assert emails[0].subject == "Test"
         mock_http_client.get.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_fetch_messages_pagination(mock_authenticator, mock_http_client):
+    """Handles pagination by following the @odata.nextLink."""
+    mock_response_1 = MagicMock(spec=httpx.Response)
+    mock_response_1.json.return_value = {
+        "value": [
+            {
+                "id": "page1-msg1",
+                "subject": "Test 1",
+                "receivedDateTime": datetime.now(timezone.utc).isoformat(),
+                "body": {"contentType": "text", "content": "..."},
+                "from": {"emailAddress": {"name": "A", "address": "a@example.com"}},
+                "toRecipients": [{"emailAddress": {"name": "B", "address": "b@example.com"}}],
+                "ccRecipients": [], "bccRecipients": [], "hasAttachments": False,
+            }
+        ],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?page=2",
+    }
+    mock_response_1.raise_for_status.return_value = None
+
+    mock_response_2 = MagicMock(spec=httpx.Response)
+    mock_response_2.json.return_value = {
+        "value": [
+            {
+                "id": "page2-msg1",
+                "subject": "Test 2",
+                "receivedDateTime": datetime.now(timezone.utc).isoformat(),
+                "body": {"contentType": "text", "content": "..."},
+                "from": {"emailAddress": {"name": "A", "address": "a@example.com"}},
+                "toRecipients": [{"emailAddress": {"name": "C", "address": "c@example.com"}}],
+                "ccRecipients": [], "bccRecipients": [], "hasAttachments": False,
+            }
+        ]
+    }
+    mock_response_2.raise_for_status.return_value = None
+
+    mock_http_client.get.side_effect = [mock_response_1, mock_response_2]
+    
+    with patch('app.services.graph_client.DelegatedGraphAuthenticator', return_value=mock_authenticator):
+        client = GraphClient(http_client=mock_http_client)
+        emails = await client.fetch_messages(user_id=TEST_USER_ID)
+        assert len(emails) == 2
+        assert emails[0].id == "page1-msg1"
+        assert emails[1].id == "page2-msg1"
+        assert mock_http_client.get.call_count == 2
+        
+        # Verify the second call uses the nextLink URL with no additional params
+        mock_http_client.get.assert_any_call(
+            "https://graph.microsoft.com/v1.0/me/messages?page=2",
+            headers={"Authorization": "Bearer mock-access-token"},
+            params=None,
+        )
 
 @pytest.mark.asyncio
 async def test_fetch_messages_input_validation(mock_http_client):
