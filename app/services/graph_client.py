@@ -54,6 +54,8 @@ class GraphClient:
             raise GraphClientError("Invalid user_id provided")
         if not isinstance(top, int) or top < 1 or top > 1000:
             raise GraphClientError("Invalid top parameter: must be between 1 and 1000")
+        if since and not isinstance(since, datetime):
+            raise GraphClientError("Invalid since parameter: must be a datetime object")
             
         params: dict[str, str | int] = {"$top": top, "$orderby": "receivedDateTime DESC"}
         if since:
