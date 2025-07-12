@@ -28,7 +28,7 @@ The application is designed with a clean separation of concerns, dividing logic 
 ### Design Choices
 - **Persistent Authentication**: OAuth2 refresh tokens are stored in the database, allowing the application to maintain long-term access without requiring repeated user logins.
 - **Concurrent Processing**: Background jobs are designed with a "fan-out" pattern, allowing multiple emails from different users to be processed in parallel for high throughput.
-- **Idempotent Processing**: Redis is used as a cache to store the timestamp of the last processed email, preventing the system from fetching and processing the same emails multiple times.
+- **Idempotent Processing**: Redis is used as a cache to store the timestamp of the last processed email, preventing the system from fetching and processing the same emails multiple times. For durability, this timestamp is also saved to Postgres in case that if the Redis cache is empty, it will be repopulated from the database, which ensures that no old emails will be re-fetched.
 - **Periodic Scheduling**: A Celery Beat task runs on a configurable schedule (e.g., every 15 minutes) to automatically trigger the email processing workflow, uses paging to ensure all emails are processed up to the timestamp recorded in the cache, which updates to the timestamp of the last processed email from the previous batch
 
 ## Getting Started (Local Development)
