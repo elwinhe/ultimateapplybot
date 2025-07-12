@@ -22,8 +22,6 @@ def test_s3_client_initialization_success():
     Tests that the S3Client initializes successfully.
     The actual bucket validation happens on the first call, not during init.
     """
-    # This test now simply ensures the client can be instantiated
-    # without any immediate errors.
     client = S3Client()
     assert client is not None
 

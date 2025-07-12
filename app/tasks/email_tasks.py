@@ -43,14 +43,29 @@ def should_process_email(email: Email) -> bool:
 
 # Asynchronous Core Logic for a Single User 
 @manage_postgres_connection
-async def process_single_mailbox_logic(user_id: str):
+async def process_single_mailbox_logic(user_id: str) -> None:
     """
     Contains the core async logic for fetching and processing emails for one user.
     """
     logger.info("Starting email processing logic for user: %s", user_id)
     redis_key = f"email_processor:last_seen_timestamp:{user_id}"
-    
+
+    # 1. Try to get timestamp from Redis
     last_seen_iso = redis_client.get(redis_key)
+    
+    # 2. If not in Redis, fall back to PostgreSQL
+    if not last_seen_iso:
+        logger.info("No timestamp in Redis for user %s. Checking PostgreSQL.", user_id)
+        db_record = await postgres_client.fetch_one(
+            "SELECT last_seen_timestamp FROM auth_tokens WHERE user_id = $1", user_id
+        )
+        if db_record and db_record["last_seen_timestamp"]:
+            last_seen_dt = db_record["last_seen_timestamp"]
+            last_seen_iso = last_seen_dt.isoformat()
+            # 3. Warm up the Redis cache
+            redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, last_seen_iso)
+            logger.info("Warmed up Redis cache for user %s with timestamp from DB: %s", user_id, last_seen_iso)
+
     since = isoparse(last_seen_iso) if last_seen_iso else None
 
     async with httpx.AsyncClient(timeout=60.0) as http_client:
@@ -103,15 +118,27 @@ async def process_single_mailbox_logic(user_id: str):
         
         # Only update the timestamp if the batch was fully successful.
         if not batch_had_errors:
-            newest_timestamp_iso = truly_new_emails[0].received_date_time.isoformat()
+            newest_timestamp = truly_new_emails[0].received_date_time
+            newest_timestamp_iso = newest_timestamp.isoformat()
+
+            # Write to both Redis and PostgreSQL for durability and speed
             redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp_iso)
-            logger.info("Updated last-seen timestamp for user %s to %s", user_id, newest_timestamp_iso)
+            await postgres_client.execute(
+                "UPDATE auth_tokens SET last_seen_timestamp = $1 WHERE user_id = $2",
+                newest_timestamp,
+                user_id,
+            )
+            logger.info(
+                "Updated last-seen timestamp for user %s to %s in Redis and DB",
+                user_id,
+                newest_timestamp_iso,
+            )
         else:
             logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
 
 # Synchronous Celery Worker Task 
 @celery.task(name="process-single-mailbox", bind=True, max_retries=3)
-def process_single_mailbox(self, user_id: str):
+def process_single_mailbox(self, user_id: str) -> None:
     """
     Synchronous Celery task wrapper that executes the async logic for a single user.
     """
@@ -124,7 +151,7 @@ def process_single_mailbox(self, user_id: str):
 
 # Synchronous Celery Dispatcher Task 
 @celery.task(name="dispatch-email-processing")
-def dispatch_email_processing():
+def dispatch_email_processing() -> None:
     """
     The main scheduled task. It fetches all authenticated users and dispatches
     a separate worker task for each one.
@@ -136,7 +163,7 @@ def dispatch_email_processing():
         logger.error("Failed to dispatch email processing tasks: %s", str(e), exc_info=True)
 
 @manage_postgres_connection
-async def dispatch_email_processing_logic():
+async def dispatch_email_processing_logic() -> None:
     """Async logic for dispatching email processing tasks."""
     users = await postgres_client.fetch_all("SELECT user_id FROM auth_tokens;")
     if not users:

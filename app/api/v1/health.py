@@ -5,7 +5,7 @@ PostgreSQL and Redis.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 import redis
 
@@ -26,7 +26,7 @@ class HealthStatus(BaseModel):
     response_model=HealthStatus,
     summary="Perform a health check of the service and its dependencies."
 )
-async def health_check():
+async def health_check() -> HealthStatus:
     is_healthy = True
     postgres_ok = "ok"
     redis_ok = "ok"

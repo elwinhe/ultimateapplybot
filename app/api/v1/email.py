@@ -74,7 +74,7 @@ async def get_current_user_id(
 
 # API Endpoint Definition 
 @router.post("/process")
-async def trigger_email_processing():
+async def trigger_email_processing() -> JSONResponse:
     """
     Trigger email processing for all authenticated users.
     This dispatches the multi-user email processing task via Celery.
@@ -100,7 +100,7 @@ async def trigger_email_processing():
 
 
 @router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(task_id: str) -> JSONResponse:
     """
     Get the status of a Celery task.
     """
@@ -134,7 +134,7 @@ async def get_my_emails(
     client: Annotated[GraphClient, Depends(get_graph_client)],
     top: int = Query(default=10, ge=1, le=100),
     since: Optional[datetime] = Query(default=None),
-):
+) -> List[Email]:
     """
     Retrieves a list of recent emails for the currently authenticated user.
     The user's identity is determined from their authentication token.

@@ -116,9 +116,14 @@ class PostgresClient:
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
+        add_last_seen_column = """
+        ALTER TABLE auth_tokens
+        ADD COLUMN IF NOT EXISTS last_seen_timestamp TIMESTAMPTZ;
+        """
         try:
             await self.execute(create_archived_emails_table)
             await self.execute(create_auth_tokens_table)
+            await self.execute(add_last_seen_column)
             logger.info("Database tables checked/created successfully.")
         except Exception as e:
             logger.error("Failed to create tables", exc_info=True)
@@ -128,7 +133,7 @@ class PostgresClient:
 postgres_client = PostgresClient(db_url=settings.DATABASE_URL)
 
 # Token Storage Functions
-async def store_refresh_token(user_id: str, refresh_token: str):
+async def store_refresh_token(user_id: str, refresh_token: str) -> None:
     """Stores or updates a user's refresh token in the database."""
     await postgres_client.execute(
         """

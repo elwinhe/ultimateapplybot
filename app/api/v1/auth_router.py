@@ -7,7 +7,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
@@ -65,7 +65,7 @@ async def auth_callback(
     code: Annotated[str, Form()],
     id_token: Annotated[str, Form()],
     auth_client: Annotated[DelegatedGraphAuthenticator, Depends(get_auth_client)],
-):
+) -> AuthResponse:
     """
     Handles the form_post callback from Microsoft after user authentication.
     Exchanges the authorization code for tokens and stores them for the user.
