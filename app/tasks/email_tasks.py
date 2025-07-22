@@ -35,9 +35,13 @@ except redis.exceptions.ConnectionError as e:
 def should_process_email(email: Email) -> bool:
     """Determines if an email should be processed based on filtering criteria."""
     subject_lower = email.subject.lower()
-    if "invoice" in subject_lower or "receipt" in subject_lower:
+    if "new grad" in subject_lower or "software engineer" in subject_lower:
         return True
-    if email.has_attachments:
+    if "jobalerts-noreply@linkedin.com" in email.from_address.address:
+        return True
+    if "job alerts" in subject_lower or "hiring" in subject_lower or "job" in subject_lower:
+        return True
+    if "master.elh@gmail.com" in email.from_address.address:
         return True
     return False
 
