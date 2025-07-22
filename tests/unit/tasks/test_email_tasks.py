@@ -348,7 +348,9 @@ async def test_process_single_mailbox_logic_batch_error_handling(
 @patch("app.tasks.email_tasks.process_single_mailbox_logic")
 def test_process_single_mailbox_task_success(mock_logic, mock_run):
     """Tests the success path of the synchronous Celery task wrapper."""
-    process_single_mailbox(USER_ID)
+    # We call the task's run method directly to test the inner logic
+    # without involving a worker.
+    process_single_mailbox.run(USER_ID)
     mock_logic.assert_called_once_with(user_id=USER_ID)
     mock_run.assert_called_once()
 
@@ -362,7 +364,8 @@ def test_process_single_mailbox_task_retry(mock_run):
         mock_retry.side_effect = Retry()
 
         with pytest.raises(Retry):
-            process_single_mailbox(user_id=USER_ID)
+            # We call the task's run method to test the retry logic
+            process_single_mailbox.run(user_id=USER_ID)
 
         mock_retry.assert_called_once()
 

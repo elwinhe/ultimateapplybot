@@ -344,8 +344,8 @@ async def test_store_refresh_token_success(mock_asyncpg):
 
         # Verify the correct query was executed
         expected_query = """
-        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at, last_seen_timestamp)
+        VALUES ($1, $2, NOW(), NOW() - interval '7 day')
         ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
         """
         mock_global_client.execute.assert_awaited_with(expected_query, "user@example.com", "refresh_token_123")
@@ -365,8 +365,8 @@ async def test_store_refresh_token_update_existing(mock_asyncpg):
 
         # Verify the correct query was executed
         expected_query = """
-        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at, last_seen_timestamp)
+        VALUES ($1, $2, NOW(), NOW() - interval '7 day')
         ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
         """
         mock_global_client.execute.assert_awaited_with(expected_query, "user@example.com", "new_refresh_token_456")
@@ -389,8 +389,8 @@ async def test_store_refresh_token_multiple_users(mock_asyncpg):
         # Verify all calls were made
         assert mock_global_client.execute.await_count == 3
         expected_query = """
-        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at, last_seen_timestamp)
+        VALUES ($1, $2, NOW(), NOW() - interval '7 day')
         ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
         """
         mock_global_client.execute.assert_any_await(expected_query, "user1@example.com", "token_1")

@@ -101,6 +101,10 @@ async def test_process_single_mailbox_happy_path(e2e_test_setup):
     Tests the full, successful workflow for a single user's mailbox.
     """
     user_id = "test-user@example.com"
+    await postgres_client.execute(
+        "INSERT INTO auth_tokens (user_id, encrypted_refresh_token) VALUES ($1, $2);",
+        user_id, "fake-refresh-token"
+    )
     now_utc = datetime.now(timezone.utc)
     mock_email = Email(
         id="e2e-test-email-id-001", subject="Your E2E Test Invoice", received_date_time=now_utc,
@@ -137,6 +141,10 @@ async def test_process_single_mailbox_s3_failure_handling(e2e_test_setup, mocker
     Tests that if S3 upload fails for a user, the high-water mark is not updated.
     """
     user_id = "failing-user@example.com"
+    await postgres_client.execute(
+        "INSERT INTO auth_tokens (user_id, encrypted_refresh_token) VALUES ($1, $2);",
+        user_id, "fake-refresh-token"
+    )
     mock_email = Email(
         id="fail-email-id-002", subject="Invoice that will fail", received_date_time=datetime.now(timezone.utc),
         body=Body(contentType="html", content="..."), from_address=EmailAddress(address="c@test.com"),

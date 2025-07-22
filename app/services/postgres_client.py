@@ -137,8 +137,8 @@ async def store_refresh_token(user_id: str, refresh_token: str) -> None:
     """Stores or updates a user's refresh token in the database."""
     await postgres_client.execute(
         """
-        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at, last_seen_timestamp)
+        VALUES ($1, $2, NOW(), NOW() - interval '7 day')
         ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
         """,
         user_id, refresh_token

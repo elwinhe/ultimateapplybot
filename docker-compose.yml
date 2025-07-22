@@ -70,13 +70,12 @@ services:
     container_name: emailreader_beat
     restart: unless-stopped
     command: >
-      celery -A app.celery_app.celery beat --loglevel=info --schedule=/app/celerybeat-schedule
-    env_file: .env
-    volumes:
-      - ./app:/app/app
+      celery -A app.celery_app.celery beat --loglevel=info
+    env_file:
+      - .env
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
+      - postgres
 
   api:
     build:
@@ -85,7 +84,8 @@ services:
       target: api-runtime
     container_name: emailreader_api
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
     ports: ["8000:8000"]
     volumes:
       - ./app:/app/app
@@ -109,7 +109,8 @@ services:
     restart: unless-stopped
     command: >
       celery -A app.celery_app.celery worker --loglevel=info --pool=prefork -c 4
-    env_file: .env
+    env_file:
+      - .env
     volumes:
       - ./app:/app/app
     depends_on:
