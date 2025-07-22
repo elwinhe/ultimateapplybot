@@ -114,6 +114,17 @@ services:
     depends_on:
       - moto
 
+  apply_worker:
+    build:
+      context: ./apply_worker
+      dockerfile: Dockerfile
+    container_name: emailreader_apply_worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - moto
+
 volumes:
   redis_data:
   postgres_data:
