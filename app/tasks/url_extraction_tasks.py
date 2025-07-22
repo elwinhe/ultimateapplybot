@@ -21,6 +21,31 @@ from app.tasks.decorators import manage_postgres_connection
 
 logger = logging.getLogger(__name__)
 
+
+def is_valid_job_url(url: str) -> bool:
+    """
+    Performs basic rule-based validation to check if a URL is a likely job application link.
+    
+    """
+    invalid_keywords = [
+        "itunes.apple.com",
+        "apps.microsoft.com",
+        "play.google.com",
+        "products",
+        "/help/linkedin/answer",
+        "unsubscribe",
+        "/in/",
+        "/feed/",
+        "/alerts?",
+        "/search?"
+    ]
+
+    if any(keyword in url.lower() for keyword in invalid_keywords):
+        return False
+        
+    return True
+
+
 def _get_html_part(msg: Message) -> Optional[str]:
     """Extracts the HTML content from an email message."""
     if msg.is_multipart():
@@ -63,7 +88,7 @@ def _extract_urls_from_eml(eml_content: bytes) -> List[str]:
         # Optional: Filter out non-http links if desired
         http_urls = {url for url in all_urls if url.startswith(('http://', 'https://'))}
         
-        return sorted(list(http_urls))
+        return list(http_urls)
         
     except Exception as e:
         logger.error(f"Failed to parse .eml file: {e}", exc_info=True)
@@ -90,7 +115,7 @@ async def extract_urls_logic():
     """
     try:
         unprocessed_emails = await postgres_client.fetch_all(
-            "SELECT message_id, s3_key, archived_at FROM archived_emails WHERE urls_extracted_at IS NULL"
+            "SELECT message_id, s3_key, archived_at FROM archived_emails WHERE urls_extracted_at IS NULL ORDER BY archived_at ASC"
         )
         
         if not unprocessed_emails:
@@ -109,15 +134,20 @@ async def extract_urls_logic():
                 urls = _extract_urls_from_eml(eml_content)
                 
                 if urls:
-                    logger.info(f"Found {len(urls)} URLs in {message_id}. Sending to SQS.")
-                    for url in urls:
-                        message = {
-                            "url": url,
-                            "source_message_id": message_id,
-                            "timestamp": archived_at,
-                        }
-                        await sqs_client.send_message(message)
-                    total_urls_found += len(urls)
+                    valid_urls = [url for url in urls if is_valid_job_url(url)]
+                    
+                    if valid_urls:
+                        logger.info(f"Found {len(valid_urls)} valid job URLs in {message_id} after filtering. Sending to SQS.")
+                        for url in valid_urls:
+                            message = {
+                                "url": url,
+                                "source_message_id": message_id,
+                                "timestamp": archived_at.isoformat(),
+                            }
+                            await sqs_client.send_message(message)
+                        total_urls_found += len(valid_urls)
+                    else:
+                        logger.info(f"Found {len(urls)} URLs in {message_id}, but none were valid job links after filtering.")
                 
                 # Mark this email as processed
                 await postgres_client.execute(

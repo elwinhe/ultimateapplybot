@@ -101,6 +101,19 @@ services:
       postgres:
         condition: service_healthy
 
+  sqs_consumer:
+    build:
+      context: .
+      dockerfile: sqs_consumer/Dockerfile
+    container_name: emailreader_sqs_consumer
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output # Mount an output directory
+    depends_on:
+      - moto
+
 volumes:
   redis_data:
   postgres_data:
