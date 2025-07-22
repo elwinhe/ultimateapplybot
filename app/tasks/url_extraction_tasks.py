@@ -16,6 +16,7 @@ from urlextract import URLExtract
 from app.celery_app import celery
 from app.services.s3_client import s3_client
 from app.services.postgres_client import postgres_client
+from app.services.sqs_client import sqs_client
 from app.tasks.decorators import manage_postgres_connection
 
 logger = logging.getLogger(__name__)
@@ -89,7 +90,7 @@ async def extract_urls_logic():
     """
     try:
         unprocessed_emails = await postgres_client.fetch_all(
-            "SELECT message_id, s3_key FROM archived_emails WHERE urls_extracted_at IS NULL"
+            "SELECT message_id, s3_key, archived_at FROM archived_emails WHERE urls_extracted_at IS NULL"
         )
         
         if not unprocessed_emails:
@@ -102,14 +103,20 @@ async def extract_urls_logic():
         for email_record in unprocessed_emails:
             message_id = email_record["message_id"]
             s3_key = email_record["s3_key"]
+            archived_at = email_record["archived_at"]
             try:
                 eml_content = await s3_client.download_eml_file(s3_key)
                 urls = _extract_urls_from_eml(eml_content)
                 
                 if urls:
-                    logger.info(f"Found {len(urls)} URLs in {s3_key}:")
+                    logger.info(f"Found {len(urls)} URLs in {message_id}. Sending to SQS.")
                     for url in urls:
-                        logger.info(f"  - Extracted URL: {url}")
+                        message = {
+                            "url": url,
+                            "source_message_id": message_id,
+                            "timestamp": archived_at,
+                        }
+                        await sqs_client.send_message(message)
                     total_urls_found += len(urls)
                 
                 # Mark this email as processed

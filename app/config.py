@@ -5,13 +5,18 @@ Centralized configuration for the application.
 Loads settings from a .env file using Pydantic.
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 class Settings(BaseSettings):
     """
     Centralized configuration for the application.
     Loads settings from a .env file.
     """
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra='ignore'
+    )
 
     # Redis/Celery
     REDIS_URL: str
@@ -27,6 +32,9 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str
     AWS_REGION: str
     S3_ENDPOINT_URL: str | None = None
+
+    # AWS SQS settings
+    SQS_QUEUE_URL: Optional[str] = None
 
     # PostgreSQL
     DATABASE_URL: str
