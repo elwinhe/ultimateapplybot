@@ -22,7 +22,9 @@ dependencies = [
     "asyncpg",
     "eventlet",
     "python-jose[cryptography]",
-    "python-multipart"
+    "python-multipart",
+    "beautifulsoup4",
+    "urlextract"
 ]
 
 [project.optional-dependencies]

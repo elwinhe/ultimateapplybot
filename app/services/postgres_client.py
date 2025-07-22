@@ -109,6 +109,10 @@ class PostgresClient:
             archived_at TIMESTAMPTZ DEFAULT NOW()
         );
         """
+        add_urls_extracted_at_column = """
+        ALTER TABLE archived_emails
+        ADD COLUMN IF NOT EXISTS urls_extracted_at TIMESTAMPTZ;
+        """
         create_auth_tokens_table = """
         CREATE TABLE IF NOT EXISTS auth_tokens (
             user_id VARCHAR(255) PRIMARY KEY,
@@ -120,10 +124,16 @@ class PostgresClient:
         ALTER TABLE auth_tokens
         ADD COLUMN IF NOT EXISTS last_seen_timestamp TIMESTAMPTZ;
         """
+        add_provider_column = """
+        ALTER TABLE auth_tokens
+        ADD COLUMN IF NOT EXISTS provider VARCHAR(255);
+        """
         try:
             await self.execute(create_archived_emails_table)
+            await self.execute(add_urls_extracted_at_column)
             await self.execute(create_auth_tokens_table)
             await self.execute(add_last_seen_column)
+            await self.execute(add_provider_column)
             logger.info("Database tables checked/created successfully.")
         except Exception as e:
             logger.error("Failed to create tables", exc_info=True)

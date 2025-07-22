@@ -22,7 +22,12 @@ class S3ClientError(Exception):
 
 
 class S3UploadError(S3ClientError):
-    """Raised when an S3 upload operation fails."""
+    """Raised when a file upload to S3 fails."""
+    pass
+
+
+class S3DownloadError(S3ClientError):
+    """Raised when a file download from S3 fails."""
     pass
 
 
@@ -32,12 +37,7 @@ class S3ValidationError(S3ClientError):
 
 
 class S3Client:
-    """
-    Handles all interactions with the Amazon S3 service.
-
-    This class manages the aioboto3 S3 client instance and provides
-    high-level methods for file operations like uploading.
-    """
+    """A thread-safe, async client for interacting with AWS S3."""
 
     def __init__(self, endpoint_url: str | None = None) -> None:
         """
@@ -174,7 +174,36 @@ class S3Client:
             raise S3UploadError(
                 f"Failed to upload {s3_object_key} to S3 due to a core library error"
             ) from e
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during file upload: {e}", exc_info=True)
+            raise S3UploadError("An unexpected error occurred during file upload") from e
+
+    async def list_eml_files(self) -> list[str]:
+        """Lists all .eml files in the S3 bucket."""
+        try:
+            async with self._session.client("s3", region_name=self._region_name, endpoint_url=self._endpoint_url) as s3_client:
+                response = await s3_client.list_objects_v2(Bucket=settings.S3_BUCKET_NAME)
+                return [
+                    item["Key"]
+                    for item in response.get("Contents", [])
+                    if item["Key"].endswith(".eml")
+                ]
+        except Exception as e:
+            logger.error(f"Failed to list files from S3 bucket '{settings.S3_BUCKET_NAME}': {e}", exc_info=True)
+            return []
+
+    async def download_eml_file(self, s3_key: str) -> bytes:
+        """Downloads an .eml file from S3."""
+        try:
+            async with self._session.client("s3", region_name=self._region_name, endpoint_url=self._endpoint_url) as s3_client:
+                s3_object = await s3_client.get_object(Bucket=settings.S3_BUCKET_NAME, Key=s3_key)
+                logger.info(f"Successfully downloaded '{s3_key}' from S3.")
+                body = s3_object["Body"]
+                return await body.read()
+        except Exception as e:
+            logger.error(f"Failed to download file '{s3_key}' from S3: {e}", exc_info=True)
+            raise S3DownloadError(f"Failed to download {s3_key}") from e
 
 
-# Singleton instance
+# Singleton instance of the S3 client
 s3_client = S3Client(endpoint_url=getattr(settings, 'S3_ENDPOINT_URL', None))

@@ -37,24 +37,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  postgres-test:
-    image: postgres:15-alpine
-    container_name: emailreader_postgres_test
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: emailreader_tester
-      POSTGRES_PASSWORD: securepassword
-      POSTGRES_DB: emailreader_test_db
-    ports: ["5433:5432"]
-    volumes:
-      - postgres_test_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U emailreader_tester -d emailreader_test_db"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   moto:
     image: motoserver/moto:latest
     container_name: emailreader_moto
@@ -119,32 +101,6 @@ services:
       postgres:
         condition: service_healthy
 
-  # --- Test Runner Service (Updated) ---
-  test-runner:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: test-runtime
-    container_name: emailreader_test_runner
-    env_file: .env
-    environment:
-      - DATABASE_URL=postgresql://emailreader_tester:securepassword@postgres-test:5432/emailreader_test_db
-      - S3_BUCKET_NAME=emailreader-test-bucket
-      - S3_ENDPOINT_URL=http://moto:5000
-    volumes:
-      - ./app:/app/app
-      - ./tests:/app/tests
-    depends_on:
-      postgres-test:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      moto:
-        condition: service_started
-    # Run as root to solve pytest cache permission issues
-    user: root
-
 volumes:
   redis_data:
   postgres_data:
-  postgres_test_data:

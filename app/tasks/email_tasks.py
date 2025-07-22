@@ -12,6 +12,7 @@ from dateutil.parser import isoparse
 
 import httpx
 import redis
+from celery import chord, group
 
 from app.celery_app import celery
 from app.config import settings
@@ -20,6 +21,7 @@ from app.services.graph_client import GraphClient, GraphClientError
 from app.services.s3_client import s3_client, S3UploadError
 from app.services.postgres_client import postgres_client, PostgresClientError
 from app.tasks.decorators import manage_postgres_connection
+from app.tasks.url_extraction_tasks import extract_urls_from_s3_emails
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +37,25 @@ except redis.exceptions.ConnectionError as e:
 def should_process_email(email: Email) -> bool:
     """Determines if an email should be processed based on filtering criteria."""
     subject_lower = email.subject.lower()
-    if "new grad" in subject_lower or "software engineer" in subject_lower:
+    body_lower = email.body.content.lower() if email.body and email.body.content else ""
+    job_keywords = [
+        "job alerts", "hiring", "job", "new grad",
+        "software engineer", "new graduate",
+        "university grad", "university graduate"
+    ]
+    sender_whitelist = [
+        "jobalerts-noreply@linkedin.com",
+        "master.elh@gmail.com",
+        "elwinhe@proton.me"
+    ]
+
+    if any(keyword in subject_lower for keyword in job_keywords):
         return True
-    if "jobalerts-noreply@linkedin.com" in email.from_address.address:
+    if email.from_address.address in sender_whitelist:
         return True
-    if "job alerts" in subject_lower or "hiring" in subject_lower or "job" in subject_lower:
+    if any(keyword in body_lower for keyword in job_keywords):
         return True
-    if "master.elh@gmail.com" in email.from_address.address:
-        return True
+
     return False
 
 # Asynchronous Core Logic for a Single User 
@@ -174,17 +187,18 @@ async def dispatch_email_processing_logic() -> None:
         logger.info("No authenticated users found to process.")
         return
 
-    logger.info("Found %d users. Dispatching tasks...", len(users))
-    dispatched_count = 0
+    logger.info("Found %d users. Dispatching tasks in a chord.", len(users))
     
-    for user in users:
-        user_id = user["user_id"]
-        try:
-            logger.info("Dispatching task for user: %s", user_id)
-            process_single_mailbox.delay(user_id=user_id)
-            dispatched_count += 1
-        except Exception as e:
-            logger.error("Failed to dispatch task for user %s: %s", user_id, str(e))
-            continue
-            
-    logger.info("Successfully dispatched %d out of %d user tasks", dispatched_count, len(users))
+    # Create a group of tasks, one for each user
+    user_tasks = group(
+        process_single_mailbox.s(user["user_id"]) for user in users
+    )
+    
+    # Define the callback task that runs after all user tasks are complete
+    callback_task = extract_urls_from_s3_emails.s()
+    
+    # Create and apply the chord
+    processing_chord = chord(user_tasks, callback_task)
+    processing_chord.apply_async()
+
+    logger.info("Successfully dispatched processing chord with %d user tasks.", len(users))
