@@ -30,7 +30,8 @@ def is_valid_job_url(url: str) -> bool:
         "/in/",
         "/feed/",
         "/alerts?",
-        "/search?"
+        "/search?",
+        "simplify.jobs"
     ]
 
     if any(keyword in url.lower() for keyword in invalid_keywords):

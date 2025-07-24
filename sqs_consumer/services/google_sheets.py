@@ -36,7 +36,7 @@ class GoogleSheetsService:
     def _initialize_sheet(self):
         """Writes the header row if the sheet is empty."""
         if not self.sheet.get_all_values():
-            self.sheet.append_row(["url", "source_message_id", "to_address", "timestamp", "status"])
+            self.sheet.append_row(["url", "subject", "user_id", "received_date_time", "status"])
             logger.info("Wrote header row to empty sheet.")
 
     def append_rows(self, data: list) -> int:

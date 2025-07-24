@@ -72,6 +72,35 @@ class SQSClient:
             logger.error("Failed to send message to SQS queue '%s': %s", self._queue_url, e, exc_info=True)
             raise SQSMessageSendError(f"Failed to send message to SQS: {e}") from e
 
+    async def send_message_batch(self, messages: list[dict[str, Any]]) -> None:
+        """
+        Sends a batch of messages to the SQS queue, handling chunking.
+
+        Args:
+            messages: A list of JSON-serializable dictionaries to send.
+        """
+        if not self._queue_url:
+            raise SQSClientError("SQS_QUEUE_URL is not configured.")
+
+        async with self._session.client("sqs", **self._client_kwargs) as sqs:
+            for i in range(0, len(messages), 10):
+                batch = messages[i:i + 10]
+                entries = [
+                    {'Id': str(j), 'MessageBody': json.dumps(msg)}
+                    for j, msg in enumerate(batch)
+                ]
+                try:
+                    await sqs.send_message_batch(
+                        QueueUrl=self._queue_url,
+                        Entries=entries
+                    )
+                    logger.info(f"Successfully sent a batch of {len(entries)} messages to SQS.")
+                except (ClientError, BotoCoreError) as e:
+                    logger.error(f"Failed to send a batch to SQS: {e}", exc_info=True)
+                    # Optionally, decide if you want to raise or just log the error
+                    # For now, we'll log and continue to not halt the entire process
+                    continue
+
 
 # Singleton instance of the SQS client
 sqs_client = SQSClient(endpoint_url=getattr(settings, 'S3_ENDPOINT_URL', None)) 

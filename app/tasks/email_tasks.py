@@ -100,12 +100,18 @@ async def process_single_mailbox_logic(user_id: str) -> None:
             logger.info("No new emails found for user %s after defensive filtering.", user_id)
             return
 
-        batch_had_errors = False
+        # Since emails are sorted DESC by receivedDateTime, the first email is the newest.
+        # This will be our high-water mark if any emails in the batch succeed.
+        potential_new_timestamp = truly_new_emails[0].received_date_time
         processed_count = 0
+        any_email_matched_filter = False
+        all_messages_to_send = []
         
         for email in truly_new_emails:
             if not should_process_email(email):
                 continue
+
+            any_email_matched_filter = True
             try:
                 # 1. Fetch .eml content directly
                 eml_content = await graph_client.fetch_eml_content(user_id=user_id, message_id=email.id)
@@ -116,37 +122,43 @@ async def process_single_mailbox_logic(user_id: str) -> None:
                     valid_urls = [url for url in urls if is_valid_job_url(url)]
                     
                     if valid_urls:
-                        logger.info(f"Found {len(valid_urls)} valid job URLs in email {email.id}. Sending to SQS.")
+                        logger.info(f"Found {len(valid_urls)} valid job URLs in email {email.id}.")
                         for url in valid_urls:
-                            message = {
+                            all_messages_to_send.append({
                                 "url": url,
-                                "source_message_id": email.id,
-                                "to_address": email.to_address,
-                                "from_address": email.from_address,
-                                "timestamp": email.received_date_time.isoformat(),
-                            }
-                            await sqs_client.send_message(message)
+                                "subject": email.subject,
+                                "user_id": user_id,
+                                "received_date_time": email.received_date_time.isoformat(),
+                            })
                 
                 processed_count += 1
                 logger.info("Successfully processed email %s for user %s for URL extraction.", email.id, user_id)
 
-            except GraphClientError as e:
+            except (GraphClientError, Exception) as e:
                 logger.error("Failed to process email %s for user %s: %s", email.id, user_id, e, exc_info=True)
-                batch_had_errors = True
+                # Note: We continue to the next email, but don't increment processed_count
                 continue
-                
-        logger.info("Processed %d emails for user %s", processed_count, user_id)
         
-        # Only update the timestamp if the batch was fully successful.
-        if not batch_had_errors:
-            newest_timestamp = truly_new_emails[0].received_date_time
-            newest_timestamp_iso = newest_timestamp.isoformat()
+        # After processing all emails, send all collected messages in batches
+        if all_messages_to_send:
+            logger.info(f"Sending a total of {len(all_messages_to_send)} URL messages to SQS in batches.")
+            await sqs_client.send_message_batch(all_messages_to_send)
+            
+        logger.info("Processed %d emails for user %s.", processed_count, user_id)
+        
+        # We update the timestamp if we made forward progress. This means either:
+        # 1. We successfully processed at least one email.
+        # 2. We scanned all emails and none of them were candidates for processing (so we can skip them next time).
+        should_update_timestamp = (processed_count > 0) or (not any_email_matched_filter)
+
+        if should_update_timestamp:
+            newest_timestamp_iso = potential_new_timestamp.isoformat()
 
             # Write to both Redis and PostgreSQL for durability and speed
             redis_client.setex(redis_key, settings.REDIS_LAST_SEEN_EXPIRY, newest_timestamp_iso)
             await postgres_client.execute(
                 "UPDATE auth_tokens SET last_seen_timestamp = $1 WHERE user_id = $2",
-                newest_timestamp,
+                potential_new_timestamp,
                 user_id,
             )
             logger.info(
@@ -154,8 +166,8 @@ async def process_single_mailbox_logic(user_id: str) -> None:
                 user_id,
                 newest_timestamp_iso,
             )
-        else:
-            logger.warning("Batch for user %s had errors. High-water mark not updated.", user_id)
+        elif truly_new_emails: # This implies emails were found, but none could be successfully processed.
+            logger.warning("Batch for user %s had matching emails, but all failed to process. High-water mark not updated to allow for retry.", user_id)
 
 # Synchronous Celery Worker Task 
 @celery.task(name="process-single-mailbox", bind=True, max_retries=3)

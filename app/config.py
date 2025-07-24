@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     CLIENT_SECRET: str
     REDIRECT_URI: str # Required for the OAuth flow
 
+    # AWS
+    AWS_ACCESS_KEY_ID: str
+    AWS_SECRET_ACCESS_KEY: str
+    AWS_REGION: str
+
     # AWS SQS settings
     SQS_QUEUE_URL: Optional[str] = None
 
