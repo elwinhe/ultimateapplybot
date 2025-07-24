@@ -18,10 +18,10 @@ from app.celery_app import celery
 from app.config import settings
 from app.models.email import Email
 from app.services.graph_client import GraphClient, GraphClientError
-from app.services.s3_client import s3_client, S3UploadError
-from app.services.postgres_client import postgres_client, PostgresClientError
+from app.services.postgres_client import postgres_client
+from app.services.sqs_client import sqs_client
 from app.tasks.decorators import manage_postgres_connection
-from app.tasks.url_extraction_tasks import extract_urls_from_s3_emails
+from app.services.email_parser import _extract_urls_from_eml, is_valid_job_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def should_process_email(email: Email) -> bool:
     job_keywords = [
         "job alerts", "hiring", "job", "new grad",
         "software engineer", "new graduate",
-        "university grad", "university graduate"
+        "university grad", "university graduate", "entry level", "entry-level"
     ]
     sender_whitelist = [
         "jobalerts-noreply@linkedin.com",
@@ -106,31 +106,35 @@ async def process_single_mailbox_logic(user_id: str) -> None:
         for email in truly_new_emails:
             if not should_process_email(email):
                 continue
-            
             try:
+                # 1. Fetch .eml content directly
                 eml_content = await graph_client.fetch_eml_content(user_id=user_id, message_id=email.id)
-                filename = f"{email.id}.eml"
-                s3_key = await s3_client.upload_eml_file(filename=filename, content=eml_content)
-                await postgres_client.execute(
-                    """
-                    INSERT INTO archived_emails (message_id, subject, received_date_time, from_address, to_addresses, s3_key)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (message_id) DO NOTHING;
-                    """,
-                    email.id,
-                    email.subject,
-                    email.received_date_time,
-                    email.from_address.address if email.from_address else None,
-                    [addr.address for addr in email.to_addresses],
-                    s3_key
-                )
+                
+                # 2. Extract URLs from the content
+                urls = _extract_urls_from_eml(eml_content)
+                if urls:
+                    valid_urls = [url for url in urls if is_valid_job_url(url)]
+                    
+                    if valid_urls:
+                        logger.info(f"Found {len(valid_urls)} valid job URLs in email {email.id}. Sending to SQS.")
+                        for url in valid_urls:
+                            message = {
+                                "url": url,
+                                "source_message_id": email.id,
+                                "to_address": email.to_address,
+                                "from_address": email.from_address,
+                                "timestamp": email.received_date_time.isoformat(),
+                            }
+                            await sqs_client.send_message(message)
+                
                 processed_count += 1
-                logger.info("Successfully processed email %s for user %s", email.id, user_id)
-            except (GraphClientError, S3UploadError, PostgresClientError) as e:
+                logger.info("Successfully processed email %s for user %s for URL extraction.", email.id, user_id)
+
+            except GraphClientError as e:
                 logger.error("Failed to process email %s for user %s: %s", email.id, user_id, e, exc_info=True)
                 batch_had_errors = True
                 continue
-        
+                
         logger.info("Processed %d emails for user %s", processed_count, user_id)
         
         # Only update the timestamp if the batch was fully successful.
@@ -187,18 +191,12 @@ async def dispatch_email_processing_logic() -> None:
         logger.info("No authenticated users found to process.")
         return
 
-    logger.info("Found %d users. Dispatching tasks in a chord.", len(users))
+    logger.info("Found %d users. Dispatching tasks.", len(users))
     
-    # Create a group of tasks, one for each user
+    # Create a group of tasks and run them directly. No callback needed.
     user_tasks = group(
         process_single_mailbox.s(user["user_id"]) for user in users
     )
-    
-    # Define the callback task that runs after all user tasks are complete
-    callback_task = extract_urls_from_s3_emails.s()
-    
-    # Create and apply the chord
-    processing_chord = chord(user_tasks, callback_task)
-    processing_chord.apply_async()
+    user_tasks.apply_async()
 
-    logger.info("Successfully dispatched processing chord with %d user tasks.", len(users))
+    logger.info("Successfully dispatched processing group with %d user tasks.", len(users))

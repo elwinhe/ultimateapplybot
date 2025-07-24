@@ -26,13 +26,6 @@ class Settings(BaseSettings):
     CLIENT_SECRET: str
     REDIRECT_URI: str # Required for the OAuth flow
 
-    # AWS S3
-    S3_BUCKET_NAME: str
-    AWS_ACCESS_KEY_ID: str
-    AWS_SECRET_ACCESS_KEY: str
-    AWS_REGION: str
-    S3_ENDPOINT_URL: str | None = None
-
     # AWS SQS settings
     SQS_QUEUE_URL: Optional[str] = None
 
@@ -47,6 +40,8 @@ class Settings(BaseSettings):
 
     # Celery Configuration
     CELERY_SECURITY_KEY: str | None = None
+
+    SKIP_S3: bool = True
 
 # Create a single, importable instance for the rest of the application to use.
 settings = Settings()

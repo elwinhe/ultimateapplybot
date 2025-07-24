@@ -69,11 +69,13 @@ class PostgresClient:
         async with self._pool.acquire() as connection:
             yield connection
 
-    async def execute(self, query: str, *args) -> str:
-        """Execute a query that doesn't return results."""
+    async def execute(self, query: str, *params) -> None:
+        """
+        Executes a query with parameters, handling connection management.
+        """
         try:
             async with self.get_connection() as conn:
-                return await conn.execute(query, *args)
+                return await conn.execute(query, *params)
         except Exception as e:
             logger.error("Failed to execute query: %s", query, exc_info=True)
             raise PostgresConnectionError(f"Query execution failed: {str(e)}") from e
@@ -98,26 +100,17 @@ class PostgresClient:
 
     async def create_tables(self) -> None:
         """Create necessary database tables if they don't exist."""
-        create_archived_emails_table = """
-        CREATE TABLE IF NOT EXISTS archived_emails (
-            message_id VARCHAR(255) PRIMARY KEY,
-            subject TEXT,
-            received_date_time TIMESTAMPTZ,
-            from_address VARCHAR(255),
-            to_addresses TEXT[],
-            s3_key VARCHAR(1024) NOT NULL,
-            archived_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        """
-        add_urls_extracted_at_column = """
-        ALTER TABLE archived_emails
-        ADD COLUMN IF NOT EXISTS urls_extracted_at TIMESTAMPTZ;
-        """
         create_auth_tokens_table = """
         CREATE TABLE IF NOT EXISTS auth_tokens (
-            user_id VARCHAR(255) PRIMARY KEY,
-            encrypted_refresh_token TEXT NOT NULL,
-            updated_at TIMESTAMPTZ DEFAULT NOW()
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(255) UNIQUE NOT NULL,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            scope TEXT,
+            last_seen_timestamp TIMESTAMP WITH TIME ZONE,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         """
         add_last_seen_column = """
@@ -129,8 +122,6 @@ class PostgresClient:
         ADD COLUMN IF NOT EXISTS provider VARCHAR(255);
         """
         try:
-            await self.execute(create_archived_emails_table)
-            await self.execute(add_urls_extracted_at_column)
             await self.execute(create_auth_tokens_table)
             await self.execute(add_last_seen_column)
             await self.execute(add_provider_column)
