@@ -44,7 +44,6 @@ def should_process_email(email: Email) -> bool:
         "university grad", "university graduate", "entry level", "entry-level"
     ]
     sender_whitelist = [
-        "jobalerts-noreply@linkedin.com",
         "master.elh@gmail.com",
         "elwinhe@proton.me"
     ]

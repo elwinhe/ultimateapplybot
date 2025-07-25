@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import email
 from email.message import Message
+import re
 from typing import List, Optional
 
 from bs4 import BeautifulSoup
@@ -31,13 +32,25 @@ def is_valid_job_url(url: str) -> bool:
         "/feed/",
         "/alerts?",
         "/search?",
-        "simplify.jobs"
+        "simplify.jobs",
+    ]
+    must_contain_keywords = [
+        r"\bjobs?\b",      # Matches job or jobs
+        r"\bcareers?\b",   # Matches career or careers
+        r"\bworking\b",   # Matches working
+        r"\bwork\b",      # Matches work
+        r"\bhiring\b",     # Matches hiring
     ]
 
-    if any(keyword in url.lower() for keyword in invalid_keywords):
+    url_lower = url.lower()
+
+    if any(keyword in url_lower for keyword in invalid_keywords):
         return False
         
-    return True
+    if any(re.search(keyword, url_lower) for keyword in must_contain_keywords):
+        return True
+
+    return False
 
 
 def _get_html_part(msg: Message) -> Optional[str]:
