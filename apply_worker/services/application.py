@@ -40,11 +40,12 @@ class ApplicationService:
         # A centralized list of regex patterns for questions handled by other methods or to be ignored.
         self.handled_question_patterns = [
             # Standard fields (name, contact info)
-            r"\b(full|legal|first|last)\s?name\b",
+            r"\b((full|legal|first|last)\s?)?name\b",
             r"\bemail\b",
             r"\bphone\b",
             r"\blinkedin\b",
             r"\bgithub\b",
+            r"\btwitter\b",
             r"\b(website|portfolio)\b",
             r"\bhear about\b",
             r"\bearliest start date\b",
@@ -99,7 +100,8 @@ class ApplicationService:
             if label.is_visible():
                 input_id = label.get_attribute("for")
                 if input_id:
-                    return page.locator(f"#{input_id}")
+                    # Use an attribute selector to handle IDs that might start with numbers
+                    return page.locator(f'[id="{input_id}"]')
                 # Fallback for labels that wrap inputs
                 return label.locator("..").locator("input, textarea, select").first
         except Exception as e:
@@ -111,7 +113,7 @@ class ApplicationService:
         logger.info("Filling standard fields...")
 
         # Handle "Full Name" and "Legal Name" edge cases first
-        full_name_input = self._get_input_by_label(page, r"^(full|legal) name$")
+        full_name_input = self._get_input_by_label(page, r"^((full|legal)\s)?name$")
         name_handled = False
         if full_name_input and full_name_input.is_visible() and not full_name_input.input_value():
             full_name = f"{config.APPLICANT_FIRST_NAME} {config.APPLICANT_LAST_NAME}"
@@ -125,6 +127,7 @@ class ApplicationService:
             "phone": config.APPLICANT_PHONE,
             "linkedin": config.APPLICANT_LINKEDIN_URL,
             "github": config.APPLICANT_GITHUB_URL,
+            "twitter": config.APPLICANT_TWITTER_URL,
             "earliest start date": "ASAP",
             "school": "Case Western Reserve University",
             "university": "Case Western Reserve University", 
@@ -318,6 +321,7 @@ class ApplicationService:
         # A list of selectors for elements that, when clicked, should trigger a file chooser.
         upload_selectors = [
             'button:has-text("Attach")',  # Greenhouse specific "Attach" button
+            'button:text-matches("upload file", "i")', # Ashby-specific
             'button:text-matches("upload resume", "i")',
             'button:text-matches("upload cv", "i")',
             'button[data-automation-id*="resume"]',  # Common on modern ATS
@@ -326,9 +330,10 @@ class ApplicationService:
         ]
 
         # Handle FrameLocator vs Page differently for file chooser
-        from playwright.sync_api import FrameLocator, Page
+        from playwright.sync_api import FrameLocator, Frame, Page
         
-        if isinstance(form_context, FrameLocator):
+        # Treat both FrameLocator and Frame (already-switched context) as an iframe path
+        if isinstance(form_context, (FrameLocator, Frame)):
             logger.info("Working within iframe context for file upload")
             
             for selector in upload_selectors:
@@ -370,35 +375,45 @@ class ApplicationService:
                         continue
                         
         else:
-            # Original logic for regular pages
+            # ========== main-page logic ==========
             logger.info("Working on main page for file upload")
-            
+
             for selector in upload_selectors:
                 target = form_context.locator(selector).first
-                
-                if target.is_visible():
-                    logger.info(f"Found potential resume upload element with selector: '{selector}'")
-                    try:
-                        with form_context.expect_file_chooser(timeout=5000) as fc_info:
+                if not target.is_visible():
+                    continue
+
+                logger.info(f"Found potential resume upload element with selector: '{selector}'")
+
+                try:
+                    # 1) direct set when we already have the <input type=file>
+                    if selector == 'input[type="file"]':
+                        target.set_input_files(config.APPLICANT_RESUME_PATH)
+                        logger.info("Uploaded via direct set_input_files on file input.")
+                    else:
+                        # 2) click the button; if filechooser fires – great
+                        with form_context.expect_file_chooser(timeout=3000) as fc_info:
                             target.click(force=True)
-                        
-                        file_chooser = fc_info.value
-                        file_chooser.set_files(config.APPLICANT_RESUME_PATH)
-                        logger.info("Successfully set files via file chooser.")
+                        fc_info.value.set_files(config.APPLICANT_RESUME_PATH)
+                        logger.info("Uploaded via file chooser after clicking button.")
+                except TimeoutError:
+                    # 3) No file-chooser fired – find hidden file input and set directly
+                    hidden_input = form_context.locator('input[type="file"]').first
+                    if hidden_input.count() and hidden_input.is_enabled():
+                        hidden_input.set_input_files(config.APPLICANT_RESUME_PATH)
+                        logger.info("Uploaded by setting files on hidden file input fallback.")
+                    else:
+                        logger.warning("File chooser did not appear and no file input found; trying next selector.")
+                        continue  # try next selector
 
-                        # After setting the file, wait for confirmation text to appear
-                        resume_filename = os.path.basename(config.APPLICANT_RESUME_PATH)
-                        confirmation_locator = form_context.locator(
-                            f"*:text-matches('{re.escape(resume_filename)}|{re.escape(resume_filename.split('.')[0])}', 'i')"
-                        ).first
-                        
-                        expect(confirmation_locator).to_be_visible(timeout=10000)
-                        logger.info("Resume upload confirmed by text visibility.")
-                        return
-
-                    except Exception as e:
-                        logger.warning(f"Interaction with selector '{selector}' failed or did not result in a file chooser. Trying next selector. Error: {e}")
-                        continue
+                # confirmation text …
+                resume_filename = os.path.basename(config.APPLICANT_RESUME_PATH)
+                confirmation = form_context.locator(
+                    f"*:text-matches('{resume_filename}|{resume_filename.split('.')[0]}','i')"
+                ).first
+                expect(confirmation).to_be_visible(timeout=10000)
+                logger.info("Resume upload confirmed.")
+                return
         
         # If the loop completes without returning, no method worked.
         logger.warning("Could not find and interact with any known resume upload element.")
@@ -479,7 +494,7 @@ class ApplicationService:
             r"sponsorship|visa.*sponsor|sponsor.*visa|require.*sponsorship|sponsorship.*require|future.*sponsorship": "No",
             
             # Employment history
-            r"former|previously.*employed|worked.*before": "No",
+            r"former|previously.*employed|worked for.*before": "No",
             
             # General consideration questions
             r"consider(ed)?|willing.*consider": "Yes",
@@ -495,6 +510,8 @@ class ApplicationService:
             
             # Geographic questions
             r"bay area|san francisco.*area|currently.*living.*bay|living.*san francisco": "Yes",
+            r"from where do you intend to work": "San Francisco, CA",
+            r"willing.*to.*relocate": "Yes",
 
             # --- Merged Demographic Questions ---
             r"gender": r"Male",
@@ -961,6 +978,7 @@ class ApplicationService:
         """
         logger.info("Looking for a submit button to finalize application.")
         submit_selectors = [
+            "button.ashby-application-form-submit-button", # Ashby-specific
             "button[type='submit']",
             "button:text-matches('^(submit|apply|finish|complete)','i')",
             "button[data-automation-id='submitButton']",  # Workday
@@ -1007,6 +1025,10 @@ class ApplicationService:
 
             logger.info(f"Navigating to job page: {url}")
             page.goto(url, wait_until="domcontentloaded")
+            
+            # Add a generous static wait for complex pages to finish loading all scripts
+            logger.info("Waiting for 5 seconds for page to settle...")
+            page.wait_for_timeout(5000)
 
             # --- Pre-Application Crawling Step ---
             # Handle embedded iframes (common with Greenhouse on company career pages)
@@ -1014,116 +1036,125 @@ class ApplicationService:
             logger.info("Waiting for page to fully load including iframes...")
             page.wait_for_timeout(5000)
             
-            iframe_selectors = [
-                "iframe[src*='greenhouse.io']",
-                "iframe#grnhse_iframe", 
-                "iframe[data-automation-id*='greenhouse']",
-                "iframe[name*='greenhouse']",
-                "iframe[id*='greenhouse']",
-                "iframe[src*='gh_jid']"  # Add this to catch QuinStreet-style embeds
-            ]
-            
-            iframe_locator = None
-            for selector in iframe_selectors:
-                potential_iframes = page.locator(selector).all()
-                logger.info(f"Checking selector '{selector}': found {len(potential_iframes)} matches")
-                if len(potential_iframes) > 0:
-                    iframe_locator = potential_iframes[0]  # Take the first one
-                    logger.info(f"Found Greenhouse iframe using selector: '{selector}'")
-                    # Wait for iframe to be ready
-                    page.wait_for_timeout(1000)
-                    break
-            
-            if not iframe_locator:
-                logger.info("No Greenhouse iframe detected. Checking for any iframes...")
-                all_iframes = page.locator("iframe").all()
-                logger.info(f"Found {len(all_iframes)} total iframes on page")
-                
-                for i, iframe in enumerate(all_iframes):
-                    try:
-                        src = iframe.get_attribute("src") or ""
-                        iframe_id = iframe.get_attribute("id") or ""
-                        iframe_name = iframe.get_attribute("name") or ""
-                        logger.info(f"Iframe {i+1}: src='{src[:100]}...', id='{iframe_id}', name='{iframe_name}'")
-                        
-                        if ("greenhouse" in src.lower() or 
-                            "gh_jid" in src or 
-                            "grnhse" in iframe_id.lower() or
-                            "greenhouse" in iframe_name.lower()):
-                            iframe_locator = iframe
-                            logger.info(f"Detected Greenhouse iframe {i+1} by content analysis")
-                            break
-                    except Exception as e:
-                        logger.warning(f"Error analyzing iframe {i+1}: {e}")
-                
-                # If still no iframe found, let's see what's actually on the page
-                if not iframe_locator:
-                    logger.warning("No Greenhouse iframe found. Checking page content...")
-                    page_title = page.title()
-                    page_url = page.url
-                    logger.info(f"Page title: '{page_title}', URL: '{page_url}'")
-                    
-                    # Check if there are any script tags that might be loading iframes dynamically
-                    scripts = page.locator("script").all()
-                    logger.info(f"Found {len(scripts)} script tags on page")
-                    
-                    # Wait a bit more and try again
-                    logger.info("Waiting additional 5 seconds for dynamic content...")
-                    page.wait_for_timeout(5000)
-                    
-                    # Try one more time
-                    all_iframes_retry = page.locator("iframe").all()
-                    logger.info(f"After additional wait, found {len(all_iframes_retry)} total iframes")
-                    
-                    for i, iframe in enumerate(all_iframes_retry):
-                        try:
-                            src = iframe.get_attribute("src") or ""
-                            iframe_id = iframe.get_attribute("id") or ""
-                            logger.info(f"Retry iframe {i+1}: src='{src[:100]}...', id='{iframe_id}'")
-                            
-                            if ("greenhouse" in src.lower() or "gh_jid" in src or "grnhse" in iframe_id.lower()):
-                                iframe_locator = iframe
-                                logger.info(f"Found Greenhouse iframe on retry: iframe {i+1}")
-                                break
-                        except Exception as e:
-                            logger.warning(f"Error analyzing retry iframe {i+1}: {e}")
-
-            form_page = page  # Default to the main page
-
-            if iframe_locator:
-                logger.info("Greenhouse iframe detected. Switching context to the iframe.")
-                form_page = iframe_locator.frame_locator(':scope')
-                # Wait for iframe content to load
-                try:
-                    form_page.locator("body").wait_for(timeout=10000)
-                    logger.info("Iframe content loaded successfully")
-                except Exception as e:
-                    logger.warning(f"Iframe content may not have loaded properly: {e}")
+            # 1️⃣  First, see if the form is already in the top-level DOM
+            if (page.locator("#application-form, #application, #form, .ashby-application-form-container").count() > 0) or "/application" in page.url:
+                logger.info("Found application form in main page – no iframe switch needed")
+                form_page = page                # work on the main page
             else:
-                logger.info("No iframe found. Looking for Apply button on main page.")
-                # Look for an 'Apply' button to navigate to the actual form if no iframe is found.
-                apply_selectors = [
-                    "a:text-matches('^apply( now)?$', 'i')",
-                    "button:text-matches('^apply( now)?$', 'i')",
-                    "a[href*='apply']"
-                ]
-                apply_button = page.locator(", ".join(apply_selectors)).first
-                
-                if apply_button.is_visible():
-                    logger.info("Found 'Apply' button. Clicking to navigate to application form.")
-                    apply_button.click()
-                    # Wait for navigation or for the URL to change
-                    page.wait_for_load_state("domcontentloaded", timeout=10000)
-                    logger.info(f"Navigated to new page: {page.url}")
-                    form_page = page
-                else:
-                    logger.warning("No Apply button found either. Proceeding with main page.")
+                logger.info("Form not in main page, searching iframes...")
+                form_page = None
+                # iterate through all frames Playwright knows about
+                for fr in page.frames:
+                    try:
+                        if fr.locator("#application-form, #application, #form, .ashby-application-form-container").count() > 0:
+                            form_page = fr
+                            logger.info(f"Found application form inside frame {fr.url[:80]}")
+                            break
+                    except Exception:
+                        # cross-origin frames raise if we touch their DOM; just skip them
+                        continue
 
+                if not form_page:
+                    logger.warning("Could not locate application form in any frame. Attempting to click an 'Apply' button if available.")
+
+            # ------------- if no form yet, try clicking "Apply" (Ashby, Greenhouse, etc.) -----------------
+            if form_page is None:
+                apply_button = page.locator(
+                    ",".join([
+                        "a:text-matches('apply to( this)? job', 'i')",
+                        "button:text-matches('apply to( this)? job', 'i')",
+                        "a:text-matches('apply for( this)? job', 'i')",
+                        "button:text-matches('apply for( this)? job', 'i')",
+                        "a:text-matches('^apply( now)?$', 'i')",
+                        "button:text-matches('^apply( now)?$', 'i')",
+                        "a[href*='apply']",
+                        "button[data-testid='applyButton']"
+                    ])
+                ).first
+                if apply_button.is_visible():
+                    logger.info("Clicking top-level Apply button (capturing possible new page)")
+
+                    new_page = None
+                    try:
+                        # Some boards open the form in a new tab/window
+                        with self.context.expect_page(timeout=10000) as page_event:
+                            apply_button.click()
+                        new_page = page_event.value
+                        logger.info("Detected new page after clicking Apply button.")
+                    except Exception:
+                        # No new page event – assume same tab navigation
+                        logger.debug("No new page event; staying on same tab.")
+                        apply_button.click()
+
+                    target_page = new_page if new_page else page
+
+                    # Wait for the target page to finish loading
+                    try:
+                        target_page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        logger.debug("Load state wait timed out but proceeding.")
+
+                    if (target_page.locator('#application-form, #application, #form, .ashby-application-form-container').count() > 0) or "/application" in target_page.url:
+                        form_page = target_page
+                        logger.info("Form found after clicking Apply button.")
+                    else:
+                        logger.warning("Form not found after clicking Apply button. Continuing without form.")
+
+            # ------------------------------------------------------------------
+            # Retry form detection after clicking the Apply button. Some boards
+            # (e.g. Ashby) render the form inside a modal that appears a few
+            # moments later and does **not** use the classic #application-form
+            # ids. Give the page a little extra time and try again using broader
+            # heuristics before giving up.
+            # ------------------------------------------------------------------
+            if form_page is None:
+                logger.info("Waiting a bit longer for application form/modal to appear…")
+                page.wait_for_timeout(5000)  # allow JS to mount modal components
+
+                # Look again on the top-level page using wider selectors
+                alt_form_selectors = [
+                    "#application-form", "#application", "#form", ".ashby-application-form-container",
+                    "form[action*='apply']",
+                    "form[action*='application']",
+                    "div[role='dialog'] form",
+                    "form[data-test*='PostingApplicationForm']"
+                ]
+                alt_locator = page.locator(", ".join(alt_form_selectors)).first
+                if alt_locator.is_visible():
+                    form_page = page
+                    logger.info("Found application form after waiting (top-level page).")
+
+                # If not on main page, search through iframes again
+                if form_page is None:
+                    for fr in page.frames:
+                        try:
+                            if fr.locator(", ".join(alt_form_selectors)).count() > 0:
+                                form_page = fr
+                                logger.info(f"Found application form inside frame {fr.url[:80]} after retry.")
+                                break
+                        except Exception:
+                            continue
+
+                # As a last resort, if we can see *any* editable input on the
+                #     page or in its frames, treat that context as the form.
+                if form_page is None:
+                    try:
+                        page.wait_for_selector("input, textarea, select", timeout=3000)
+                        logger.warning("No explicit form container found, but inputs are present – proceeding with main page as form context.")
+                        form_page = page
+                    except Exception:
+                        logger.error("Still could not locate an application form after retries.")
+                        return False, {}
+
+            # If we still don't have a form, give up gracefully
+            if form_page is None:
+                logger.error("Could not locate application form even after attempting to click an 'Apply' button.")
+                return False, {}
 
             # --- Platform-Specific Optimizations ---
             # Note: The form_page variable might be a FrameLocator, which doesn't have a `url` attribute.
             # We still check the top-level page URL for this.
-            if "greenhouse.io" in page.url or iframe_locator:
+            if "greenhouse.io" in page.url or page.locator("iframe[src*='greenhouse.io']").first:
                 # Skip Greenhouse autofill as it may prevent manual field completion.
                 logger.info("Greenhouse detected, but skipping autofill to allow manual field completion.")
                 # autofill_button = form_page.locator("button", has_text="Autofill with Greenhouse").first
@@ -1136,12 +1167,12 @@ class ApplicationService:
             
             # --- General Application Logic ---
             logger.info("Starting general form filling process...")
-            # Wait for body to be stable before getting text. Use the form_page context.
-            form_page.locator("body").wait_for(timeout=5000)
+            if form_page is page:
+                form_page.locator("body").wait_for(timeout=5000)
             
             # Limit the job description text to avoid exceeding token limits
             full_job_description = form_page.locator("body").inner_text()
-            max_words = 2000
+            max_words = 400
             job_description_words = full_job_description.split()
             truncated_job_description = " ".join(job_description_words[:max_words])
             

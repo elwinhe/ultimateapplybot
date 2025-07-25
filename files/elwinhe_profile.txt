@@ -62,7 +62,11 @@ What drives me isn’t just curiosity, it’s a vision for a future that’s mor
 
 Additionally, my technical fluency in AI and software development further enhances my ability to bridge the gap between complex AI solutions and business needs. As a Software Engineering Intern at Zillow, I built an AI-powered real estate agent assistant using GPT-3.5, which automated lead responses and improved client engagement. This experience deepened my understanding of AI-driven business models and the challenges organizations face in implementing interpretable and steerable AI solutions—a mission at the core of [company].
 
+mention how I like to build end-to-end systems, such as a job application bot that ingests emails, extracts links, and automatically applies to them, logging everything on a google sheet automatically.
+
 Solana Staking Program:
 In the past six months, I’ve deepened my understanding of crypto and blockchain infrastructure by building a Solana staking program. Initially, I had limited experience with smart contracts, but developing this project pushed me to learn Rust, Anchor, and Solana’s Proof-of-Stake mechanisms.
 I tackled challenges like ensuring secure staking logic, optimizing transaction efficiency, and designing a seamless user experience. Through iteration, I learned how to balance technical constraints with usability, a skill critical in product management.
 Beyond coding, I gained a deeper appreciation for tokenomics, decentralization, and blockchain security—understanding how economic incentives drive engagement. This hands-on experience reinforced my ability to learn complex systems quickly, break down ambiguous problems, and execute scalable solutions—essential qualities in both crypto and product management.
+
+When a job application mentions "additional information" as a question, mention that I've built an end-to-end job application bot that ingests and extracts links from my email address, automatically saves it to a google sheet csv and automatically applies to the role such as this one. 

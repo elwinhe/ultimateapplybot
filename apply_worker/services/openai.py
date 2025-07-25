@@ -46,6 +46,7 @@ class OpenAIService:
 
     def generate_custom_answer(self, question: str, job_description: str, applicant_details: str) -> str:
         logger.info(f"Generating answer for custom question: '{question[:50]}...'")
+        logger.info(f"context: {job_description}\n\n{question}\n\n{applicant_details}")
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
@@ -54,9 +55,9 @@ class OpenAIService:
                     {"role": "user", "content": f"THE JOB DESCRIPTION:\n{job_description}\n\nTHE QUESTION TO ANSWER:\n{question}\n\nTHE APPLICANT DETAILS:\n{applicant_details}"}
                 ],
                 temperature=0.5,
-            )
+            ) 
             answer = response.choices[0].message.content
-            logger.info(f"Generated answer: '{answer[:50]}...'")
+            logger.info(f"Generated answer: {answer}")
             return answer
         except Exception as e:
             logger.error(f"Failed to generate custom answer: {e}")
