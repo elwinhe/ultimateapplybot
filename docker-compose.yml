@@ -120,10 +120,19 @@ services:
       dockerfile: Dockerfile
     container_name: emailreader_apply_worker
     restart: unless-stopped
+    ports:
+      - "5900:5900" # Expose VNC port
     env_file:
       - .env
+    volumes:
+      - ./files:/app/files
     depends_on:
-      - moto
+      redis:
+        condition: service_healthy
+      moto:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
 volumes:
   redis_data:

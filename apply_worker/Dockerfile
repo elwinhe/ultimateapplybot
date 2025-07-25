@@ -1,5 +1,11 @@
 # Use the official Playwright image which includes all browser dependencies
-FROM mcr.microsoft.com/playwright/python:v1.53.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.54.0-jammy
+
+# Install xvfb and a VNC server
+RUN export DEBIAN_FRONTEND=noninteractive && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends xvfb x11vnc fluxbox && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container
 WORKDIR /app
@@ -17,5 +23,11 @@ RUN uv pip install --no-cache-dir --system -r requirements.txt
 # Copy the rest of the application's code into the container
 COPY . .
 
-# Command to run the application
-CMD ["python", "main.py"] 
+# Copy the entrypoint script
+COPY entrypoint.sh .
+
+# Make the script executable
+RUN chmod +x entrypoint.sh
+
+# Set the entrypoint to our script
+ENTRYPOINT ["./entrypoint.sh"] 

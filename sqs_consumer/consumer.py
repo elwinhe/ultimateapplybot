@@ -37,8 +37,7 @@ class SQSConsumer:
             raise
 
         self.sheets_service = GoogleSheetsService()
-        self.auto_apply_platforms = ["lever.co", "greenhouse.io", "ashbyhq.com"]
-        
+
         # Initialize an in-memory cache for URLs to prevent rate limiting
         logger.info("Initializing local URL cache from Google Sheet...")
         self.existing_urls = self.sheets_service.get_all_urls()
@@ -50,61 +49,88 @@ class SQSConsumer:
         self.last_write_time = time.time()
 
 
-    def _is_auto_appliable(self, url: str) -> bool:
-        """Checks if a URL is from a platform we can automatically apply to."""
-        return any(platform in url for platform in self.auto_apply_platforms)
-
     def _flush_write_buffer(self):
-        """Writes the current buffer to Google Sheets and clears it."""
+        """
+        Writes the buffer to Google Sheets, then forwards appliable messages to the
+        apply queue. This is designed to be resilient and prevent duplicate sheet entries.
+        """
         if not self.write_buffer:
             return
 
-        logger.info(f"Flushing buffer with {len(self.write_buffer)} rows to Google Sheets.")
+        logger.info(f"Attempting to flush buffer with {len(self.write_buffer)} rows to Google Sheets.")
+        
+        # Step 1: Write to Google Sheets. If this fails, we abort and retry the whole
+        # operation on the next cycle. This is the only part of the function that should
+        # prevent the buffer from being cleared on failure.
         try:
             start_row = self.sheets_service.append_rows(self.write_buffer)
-            
-            # Forward appliable URLs to the next queue
+            logger.info(f"Successfully wrote {len(self.write_buffer)} rows to sheet, starting at row {start_row}.")
+        except APIError as e:
+            logger.error(f"Failed to write to Google Sheets due to APIError. Will retry. Error: {e}")
+            time.sleep(60)  # Add a delay to avoid hammering the API
+            return # Exit without clearing buffer to allow for a full retry.
+        except Exception as e:
+            logger.error(f"An unexpected error occurred writing to Sheets. Will retry. Error: {e}", exc_info=True)
+            return # Exit for retry.
+
+        # --- From this point on, the buffer MUST be cleared to prevent duplicates ---
+
+        # Step 2: Prepare and send messages to the apply queue for auto-appliable URLs.
+        try:
+            messages_to_forward = []
             for i, row_data in enumerate(self.write_buffer):
-                url = row_data[0] # URL is the first item
-                if self._is_auto_appliable(url):
+                url = row_data[0]
+                is_appliable = True
+                logger.info(f"Checking URL for auto-application: '{url}'. Auto-appliable: {is_appliable}")
+                if is_appliable:
                     sheet_row_num = start_row + i
-                    # Find the original message to enrich and forward
                     original_message_body = json.loads(self.buffered_messages_for_delete[i]['Body'])
                     original_message_body['sheet_row'] = sheet_row_num
-                    self.sqs_client.send_message(
+                    messages_to_forward.append({
+                        'Id': self.buffered_messages_for_delete[i]['MessageId'],
+                        'MessageBody': json.dumps(original_message_body)
+                    })
+
+            if messages_to_forward:
+                logger.info(f"Forwarding {len(messages_to_forward)} messages to the apply queue...")
+                for i in range(0, len(messages_to_forward), 10):
+                    batch = messages_to_forward[i:i+10]
+                    self.sqs_client.send_message_batch(
                         QueueUrl=config.SQS_APPLY_QUEUE_URL,
-                        MessageBody=json.dumps(original_message_body)
+                        Entries=batch
                     )
-            
-            # Batch delete messages from the primary queue, respecting the 10-message limit
+                logger.info("Successfully forwarded messages to apply queue.")
+
+        except Exception as e:
+            # CRITICAL: Log this failure. These jobs are in the sheet but won't be applied automatically.
+            logger.critical(f"Failed to forward messages to apply queue after writing to sheets: {e}", exc_info=True)
+
+        # Step 3: Delete messages from the source queue. This happens regardless of
+        # forwarding success to prevent reprocessing and creating duplicate sheet entries.
+        try:
             all_entries_to_delete = [
                 {'Id': msg['MessageId'], 'ReceiptHandle': msg['ReceiptHandle']}
                 for msg in self.buffered_messages_for_delete
             ]
-            
             if all_entries_to_delete:
-                logger.info(f"Preparing to delete {len(all_entries_to_delete)} messages in batches of 10.")
+                logger.info(f"Deleting {len(all_entries_to_delete)} messages from source queue...")
                 for i in range(0, len(all_entries_to_delete), 10):
                     batch = all_entries_to_delete[i:i + 10]
-                    self.sqs_client.delete_message_batch(
+                    response = self.sqs_client.delete_message_batch(
                         QueueUrl=config.SQS_QUEUE_URL,
                         Entries=batch
                     )
-                    logger.info(f"Deleted a batch of {len(batch)} messages.")
-                logger.info("Finished deleting all message batches.")
-
-            # Clear buffers and reset timer on success
-            self.write_buffer.clear()
-            self.buffered_messages_for_delete.clear()
-            self.last_write_time = time.time()
-
-        except APIError as e:
-            logger.error(f"Failed to write buffer to Google Sheets. Will retry. Error: {e}")
-            # Do not clear buffers, allow for retry on the next cycle.
-            # Add a small delay to avoid hammering the API on retries.
-            time.sleep(60)
+                    if response.get('Failed'):
+                        logger.error(f"Failed to delete some messages from SQS: {response['Failed']}")
+                logger.info("Finished deleting messages from source queue.")
         except Exception as e:
-            logger.error(f"An unexpected error occurred during buffer flush: {e}", exc_info=True)
+            logger.error(f"An unexpected error occurred deleting messages from source queue: {e}", exc_info=True)
+
+        # Step 4: Always clear the buffer and reset the timer after a successful sheet write.
+        self.write_buffer.clear()
+        self.buffered_messages_for_delete.clear()
+        self.last_write_time = time.time()
+        logger.info("Cleared local buffers.")
 
 
     def start_consuming(self):

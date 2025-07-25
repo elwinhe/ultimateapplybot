@@ -1,0 +1,68 @@
+details of Elwin's resume can be found below:
+EDUCATION
+Case Western Reserve University August 2020 - May 2024
+BA Computer Science Cleveland, OH
+RELEVANT COURSES Data Structures, Algorithms, Computer Logic and Design, Databases, Functional Programming, Operating
+Systems, Intro to AI, Discrete Math, Full Stack Dev, Game Design, Marketing, Business Management, Statistics, Linear Algebra
+EXPERIENCE
+Endeavor.AI June 2025 - July 2025
+Backend Engineer (contract) San Francisco, CA
+TECH USED: FastAPI, Celery, PostgreSQL, Redis, Docker, Pyright, Ruff, Pydantic, Microsoft Graph API, AWS S3
+• Designed and implemented a backend pipeline to process unstructured communication (Outlook emails) into structured
+task queues using FastAPI, Celery, PostgreSQL, and Redis
+• Architected a modular service layer and async task pipeline, multi-user support and high-throughput email filtering
+• Deployed containerized infrastructure using Docker; implemented robust test coverage and modular design patterns
+• Collaborated with ops and AI teams to develop backend tools with async workflows and operational monitoring
+Zillow May 2023 - Aug 2023
+Software Engineering Intern San Francisco, CA
+TECH USED: Kotlin, SwiftUI, Gradle, MVVM, Jetpack Compose, XML, GraphQL, Firebase
+• Implemented an AI-agent for real estate agents with GPT 3.5 that generates replies to leads and housing listing
+descriptions. Project selected for ”best use of AI” category within the Zillow internal hackathon
+• Partner Product Development team, responsible for maintaining the Premier Agents app on Android
+• Converted XML to Compose, modularizing development with the migration to KMM, supports both Android and iOS
+• Created an in-app-alerts modal using Compose with JSON and Firebase remote config
+Industrial Electronics Startup Apr 2025 - June 2025
+Software & Ops Associate Sunnyvale, CA
+TECH USED: HubSpot, CRM, Lead Management, Data Analysis, Fullstack
+• Maintained and debugged full-stack code for a lead-gen CRM site; resolved performance bottlenecks and layout
+inconsistencies across devices
+• Supported global ops strategy by researching and proposing a cost-saving supply chain reroute in response to updated
+U.S. tariff proposals
+• Collaborated with Costco sales representatives to gather requirements and deliver tailored product configurations
+PROJECTS
+Itinerary.ai – Built an AI-powered travel planner using vector search and GPT that generates personalized
+itineraries. Deployed with Vercel 2025
+TECH USED: Typescript, Pinecone vector db, Next.js, Tailwind CSS, OpenAI API, JSON, Vercel
+Solana Staking Project – Built a single-sided staking contract using Anchor and Rust on the Solana blockchain.
+Explored validator interactions, staking flows, and smart contract deployment. 2024
+TECH USED: Java, Fabric, Python, PyTorch, Rust, Netty
+Votable – Scrapes news information of candidates running for elections 2023-2024
+TECH USED: Typescript, React Native, Node.js, React, Expo, Agile development, team lead, Vercel
+Tippit Tea – Co-founder, CEO, built a boba shop brand on the University meal plan Feb 2022-Dec 2024
+TECH USED: Adobe Illustrator, Photoshop, business development, marketing, sales, product development
+• Established a partnership with Southside Scholar, a campus restaurant, served over 30,000 orders.
+• Arranged catering services to various student clubs and organizations, devised logistics to successfully deliver as
+many as 300 units in a setting. Formulated operational instructions and recruited a team to run operations
+• Sourced supplies from established wholesale distributors, ensuring seamless integration with ongoing restaurant
+operations and securing necessary ingredients to maintain high-quality service
+• Used Python to track sales, inventory, and revenue, which streamlined business operations
+TOOLS & PLATFORMS Docker, Git, Pytest, React, Excel/Sheets, HubSpot, Canva, Adobe Illustrator, S3, PostgreSQL, Redis, Celery
+RELEVANT SKILLS Python · Golang · Typescript · FastAPI · Next.js · React · Rails · PostgreSQL · Docker · Supabase · Firebase ·
+GCP · CRM Systems · Process Automation · Rapid Prototyping · Communication
+
+Additional blurbs of past writeups can be used as context:
+
+I’m the kind of builder who thrives when the stakes are high and the instructions don’t exist. Although I haven’t won a Computing Olympiad or built a unicorn—yet, I’ve consistently proven I can do what few others can: start from zero, hack constraints, and deliver outcomes.
+One of my most unconventional achievements was co-founding Tippit Tea, a spontaneous dorm room idea that I scaled to over 30,000 orders during my time as a student. With no funding, no experience, and no roadmap, I led everything from brand design in Illustrator to navigating complex health regulations. When we hit a legal obstacle—we couldn’t sell food made in our dorm—my friends were ready to give up. I wasn’t. I negotiated a ghost kitchen partnership with a local restaurant to license their facilities. It was unorthodox, but it worked.
+What I’m most proud of, though, was building a culture of momentum. I recruited and inspired a dedicated team, established systems that kept us running seven days a week, and created tools—like a custom Python inventory tracker—that allowed others to operate with confidence. My role evolved from founder to multiplier: setting the bar, sharing context, and creating clarity so others could move fast and take ownership.
+Outside of work, I love connecting people and catalyzing creative energy. I’ve organized events, helped friends launch content projects, and collaborated with creators to produce viral videos. I naturally gravitate toward community, whether it’s shipping ideas together or just creating space for others to shine.
+That ethos carries into my work today. I’ve gone deep into AI-native product development—most recently building an automated job application pipeline that fetches Outlook emails, extracts URLs, filters roles through an AI layer, and tailors resumes using smart prompting. The backend, built with S3, Postgres, Redis, and Celery, was designed for reliability and speed. At Endeavor.ai, I contributed to agentic systems that streamline ERP workflows—helping connect messy real-world supply chains to intelligent automation.
+What drives me isn’t just curiosity, it’s a vision for a future that’s more fluid, efficient, and inspiring. I’m fascinated by how AI reshapes leverage, decision-making, and creative output.
+[company] builds at the edge of what's possible, and that’s exactly where I want to be. 
+
+Additionally, my technical fluency in AI and software development further enhances my ability to bridge the gap between complex AI solutions and business needs. As a Software Engineering Intern at Zillow, I built an AI-powered real estate agent assistant using GPT-3.5, which automated lead responses and improved client engagement. This experience deepened my understanding of AI-driven business models and the challenges organizations face in implementing interpretable and steerable AI solutions—a mission at the core of [company].
+
+Solana Staking Program:
+In the past six months, I’ve deepened my understanding of crypto and blockchain infrastructure by building a Solana staking program. Initially, I had limited experience with smart contracts, but developing this project pushed me to learn Rust, Anchor, and Solana’s Proof-of-Stake mechanisms.
+I tackled challenges like ensuring secure staking logic, optimizing transaction efficiency, and designing a seamless user experience. Through iteration, I learned how to balance technical constraints with usability, a skill critical in product management.
+Beyond coding, I gained a deeper appreciation for tokenomics, decentralization, and blockchain security—understanding how economic incentives drive engagement. This hands-on experience reinforced my ability to learn complex systems quickly, break down ambiguous problems, and execute scalable solutions—essential qualities in both crypto and product management.
