@@ -38,6 +38,11 @@ def should_process_email(email: Email) -> bool:
     """Determines if an email should be processed based on filtering criteria."""
     subject_lower = email.subject.lower()
     body_lower = email.body.content.lower() if email.body and email.body.content else ""
+     # Confirmation email patterns
+    confirmation_keywords = [
+        "thank you", "your interest", "action required", "next steps", "sent", "received", "confirmation"
+    ]
+
     job_keywords = [
         "job alerts", "hiring", "job", "new grad",
         "software engineer", "new graduate",
