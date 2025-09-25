@@ -4,7 +4,7 @@ app/api/v1/auth_router.py
 API router for handling the user-facing authentication flow.
 """
 import logging
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -42,15 +42,15 @@ def get_auth_client(request: Request) -> DelegatedGraphAuthenticator:
 @router.get("/login", summary="Initiate user authentication")
 async def login(
     auth_client: Annotated[DelegatedGraphAuthenticator, Depends(get_auth_client)]
-) -> RedirectResponse:
+) -> dict:
     """
-    Redirects the user to the Microsoft login page to grant consent.
+    Returns the Microsoft login URL for the frontend to redirect to.
     This is the first step of the OAuth 2.0 flow.
     """
     try:
         auth_url = auth_client.get_auth_flow_url()
-        logger.info("Redirecting user to Microsoft for authentication.")
-        return RedirectResponse(url=auth_url)
+        logger.info("Generated Microsoft authentication URL.")
+        return {"redirectUrl": auth_url}
     except Exception as e:
         logger.error("Failed to generate auth URL", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to initiate authentication.")
@@ -59,20 +59,27 @@ async def login(
 @router.post(
     "/callback",
     summary="Handle Microsoft authentication callback",
-    response_model=AuthResponse,
 )
 async def auth_callback(
     code: Annotated[str, Form()],
     id_token: Annotated[str, Form()],
     auth_client: Annotated[DelegatedGraphAuthenticator, Depends(get_auth_client)],
-) -> AuthResponse:
+    state: Annotated[Optional[str], Form()] = None,
+) -> RedirectResponse:
     """
     Handles the form_post callback from Microsoft after user authentication.
     Exchanges the authorization code for tokens and stores them for the user.
+    Redirects back to the frontend homepage.
     """
     try:
-        await auth_client.acquire_and_store_tokens(code, id_token)
-        return AuthResponse(message="Authentication successful. Refresh token stored.")
+        await auth_client.acquire_and_store_tokens(code, id_token, state)
+        logger.info("Microsoft Outlook authentication successful, redirecting to homepage")
+        # Redirect to frontend homepage (port 8080 based on current setup)
+        frontend_url = "http://localhost:8080"
+            
+        return RedirectResponse(url=frontend_url, status_code=302)
     except GraphAuthError as e:
         logger.error("Failed to acquire tokens during callback", exc_info=True)
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {e}")
+        # On error, redirect to frontend with error parameter
+        frontend_url = "http://localhost:8080?auth_error=outlook_connection_failed"
+        return RedirectResponse(url=frontend_url, status_code=302)

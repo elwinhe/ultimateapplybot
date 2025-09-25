@@ -9,7 +9,6 @@ from datetime import datetime
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.api.v1.email import get_current_user_id
@@ -29,12 +28,21 @@ class IntegrationType(str, Enum):
     GMAIL = "gmail"
     OUTLOOK = "outlook"
 
+class ConnectedAccount(BaseModel):
+    id: str
+    email: str
+    microsoft_user_id: Optional[str] = None
+    connected_at: datetime
+    last_authenticated: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
 class IntegrationStatus(BaseModel):
     type: IntegrationType
     connected: bool
-    email: Optional[str] = None
-    connected_at: Optional[datetime] = None
-    last_sync: Optional[datetime] = None
+    email: Optional[str] = None  # For backward compatibility
+    connected_at: Optional[datetime] = None  # For backward compatibility
+    last_sync: Optional[datetime] = None  # For backward compatibility
+    accounts: Optional[List[ConnectedAccount]] = None  # New field for multiple accounts
 
 class IntegrationResponse(BaseModel):
     integrations: List[IntegrationStatus]
@@ -48,22 +56,38 @@ async def get_integration_status(
     Get status of all email integrations for the current user.
     """
     try:
-        # Check Outlook/Microsoft integration
-        outlook_token = await postgres_client.fetch_one(
+        # Check Outlook/Microsoft integrations - get all connected accounts
+        outlook_tokens = await postgres_client.fetch_all(
             """
-            SELECT user_email, created_at, last_seen_timestamp
+            SELECT user_email, created_at, last_seen_timestamp, provider, expires_at, id
             FROM auth_tokens
-            WHERE user_id = $1
+            WHERE user_id = $1 AND provider = 'microsoft'
             """,
             current_user_id
         )
         
+        # Convert tokens to ConnectedAccount objects
+        outlook_accounts = []
+        for token in outlook_tokens:
+            if token["user_email"]:  # Only include accounts with email addresses
+                account = ConnectedAccount(
+                    id=str(token["id"]),
+                    email=token["user_email"],
+                    microsoft_user_id=None,  # No longer storing Microsoft user ID
+                    connected_at=token["created_at"],
+                    last_authenticated=token["last_seen_timestamp"],
+                    expires_at=token["expires_at"]
+                )
+                outlook_accounts.append(account)
+        
+        # Create status object with all connected accounts
         outlook_status = IntegrationStatus(
             type=IntegrationType.OUTLOOK,
-            connected=bool(outlook_token),
-            email=outlook_token["user_email"] if outlook_token else None,
-            connected_at=outlook_token["created_at"] if outlook_token else None,
-            last_sync=outlook_token["last_seen_timestamp"] if outlook_token else None,
+            connected=bool(outlook_accounts),
+            email=outlook_accounts[0].email if outlook_accounts else None,  # For backward compatibility
+            connected_at=outlook_accounts[0].connected_at if outlook_accounts else None,  # For backward compatibility
+            last_sync=outlook_accounts[0].last_authenticated if outlook_accounts else None,  # For backward compatibility
+            accounts=outlook_accounts if outlook_accounts else None
         )
         
         # Gmail integration - check if we have stored OAuth tokens
@@ -136,20 +160,17 @@ async def disconnect_gmail(
 async def connect_outlook(
     request: Request,
     current_user_id: str = Depends(get_current_user_id),
-) -> RedirectResponse:
+) -> Dict[str, str]:
     """
     Initiate Outlook/Microsoft OAuth connection flow.
-    Redirects to Microsoft login page.
+    Returns the OAuth URL for the frontend to redirect to.
     """
     try:
         # Reuse existing auth flow from auth_router
         auth_client = DelegatedGraphAuthenticator(http_client=request.app.state.http_client)
-        auth_url = auth_client.get_auth_flow_url()
+        auth_url = auth_client.get_auth_flow_url(user_id=current_user_id)
         
-        # Store user_id in session/state for callback
-        # Note: In production, use proper session management
-        
-        return RedirectResponse(url=auth_url)
+        return {"redirectUrl": auth_url}
         
     except Exception as e:
         logger.error(f"Failed to initiate Outlook connection: {e}", exc_info=True)
@@ -182,3 +203,51 @@ async def disconnect_outlook(
     except Exception as e:
         logger.error(f"Failed to disconnect Outlook: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to disconnect Outlook")
+
+@router.get("/outlook/details")
+async def get_outlook_details(
+    current_user_id: str = Depends(get_current_user_id),
+) -> Dict[str, Any]:
+    """
+    Get detailed information about the Outlook integration for the current user.
+    """
+    try:
+        # Get detailed Outlook/Microsoft integration info
+        outlook_details = await postgres_client.fetch_one(
+            """
+            SELECT 
+                user_id,
+                user_email,
+                provider,
+                expires_at,
+                scope,
+                created_at,
+                updated_at,
+                last_seen_timestamp
+            FROM auth_tokens
+            WHERE user_id = $1 AND provider = 'microsoft'
+            """,
+            current_user_id
+        )
+        
+        if not outlook_details:
+            return {
+                "connected": False,
+                "message": "No Outlook integration found for this user"
+            }
+        
+        return {
+            "connected": True,
+            "user_id": str(outlook_details["user_id"]),
+            "user_email": outlook_details["user_email"],
+            "provider": outlook_details["provider"],
+            "expires_at": outlook_details["expires_at"].isoformat() if outlook_details["expires_at"] else None,
+            "scope": outlook_details["scope"],
+            "connected_at": outlook_details["created_at"].isoformat() if outlook_details["created_at"] else None,
+            "last_updated": outlook_details["updated_at"].isoformat() if outlook_details["updated_at"] else None,
+            "last_sync": outlook_details["last_seen_timestamp"].isoformat() if outlook_details["last_seen_timestamp"] else None,
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get Outlook details: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get Outlook details")

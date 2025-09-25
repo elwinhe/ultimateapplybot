@@ -25,10 +25,15 @@ class DelegatedGraphAuthenticator:
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
         self._http_client = http_client or httpx.AsyncClient()
 
-    def get_auth_flow_url(self) -> str:
+    def get_auth_flow_url(self, user_id: Optional[str] = None) -> str:
         """Builds the URL for any user to sign in."""
         # Generate a secure random nonce for CSRF protection
         nonce = secrets.token_urlsafe(32)
+        
+        # Include user_id in state parameter for callback association
+        state = f"{nonce}"
+        if user_id:
+            state = f"{nonce}:{user_id}"
         
         params = {
             "client_id": settings.CLIENT_ID,
@@ -36,12 +41,13 @@ class DelegatedGraphAuthenticator:
             "redirect_uri": settings.REDIRECT_URI,
             "scope": "openid profile email Mail.Read offline_access",
             "response_mode": "form_post",
+            "state": state,
             "nonce": nonce
         }
         request = httpx.Request("GET", self._auth_url, params=params)
         return str(request.url)
 
-    async def acquire_and_store_tokens(self, code: str, id_token: str) -> None:
+    async def acquire_and_store_tokens(self, code: str, id_token: str, state: Optional[str] = None, app_user_id: Optional[str] = None) -> None:
         """Acquires tokens and stores the refresh token against the user's ID."""
         # Input validation
         if not code or len(code) < 10:
@@ -49,11 +55,18 @@ class DelegatedGraphAuthenticator:
         if not id_token or len(id_token) < 10:
             raise GraphAuthTokenError("Invalid id_token format")
             
+        # Extract app user_id from state parameter if available
+        if state and ":" in state:
+            _, extracted_user_id = state.split(":", 1)
+            app_user_id = app_user_id or extracted_user_id
+            
+        # Get Microsoft user info for email address
         try:
             claims = jwt.get_unverified_claims(id_token)
-            user_id = claims.get("preferred_username") or claims.get("oid")
-            if not user_id:
-                raise GraphAuthTokenError("User identifier not found in id_token.")
+            microsoft_user_email = claims.get("preferred_username") or claims.get("email")
+            microsoft_user_id = claims.get("oid")
+            if not microsoft_user_email:
+                raise GraphAuthTokenError("User email not found in id_token.")
         except JWTError as e:
             raise GraphAuthTokenError("Invalid id_token.") from e
 
@@ -72,11 +85,17 @@ class DelegatedGraphAuthenticator:
 
         result = response.json()
         refresh_token = result.get("refresh_token")
+        access_token = result.get("access_token")
         if not refresh_token:
             raise GraphAuthTokenError("No refresh token returned.")
 
-        await store_refresh_token(user_id, refresh_token)
-        logger.info("Successfully stored refresh token for user %s", user_id)
+        # Use application user_id if available, otherwise fall back to Microsoft user_id for backward compatibility
+        storage_user_id = app_user_id or microsoft_user_id
+        if not storage_user_id:
+            raise GraphAuthTokenError("No user identifier available for token storage.")
+
+        await store_refresh_token(storage_user_id, refresh_token, microsoft_user_email, access_token)
+        logger.info("Successfully stored refresh token for app_user %s with Microsoft email %s", storage_user_id, microsoft_user_email)
 
     async def get_access_token_for_user(self, user_id: str) -> str:
         """Gets a new access token for a specific user."""

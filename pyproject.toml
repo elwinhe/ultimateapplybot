@@ -24,7 +24,8 @@ dependencies = [
     "python-jose[cryptography]",
     "python-multipart",
     "beautifulsoup4",
-    "urlextract"
+    "urlextract",
+    "passlib[bcrypt]"
 ]
 
 [project.optional-dependencies]

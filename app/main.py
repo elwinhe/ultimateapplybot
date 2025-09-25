@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import email as email_v1_router
 from app.api.v1 import health as health_v1_router
 from app.api.v1 import auth_router
+from app.api.v1 import user_auth
 from app.api.v1 import jobs as jobs_v1_router
 from app.api.v1 import activity as activity_v1_router
 from app.api.v1 import settings as settings_v1_router
@@ -72,6 +73,8 @@ def create_app() -> FastAPI:
         allow_origins=[
             "http://localhost:3000",  # Local development
             "http://localhost:5173",  # Vite default port
+            "http://localhost:8080",  # Vite alternative port
+            "http://localhost:8081",  # Vite alternative port
             "https://career-pilot-dash.vercel.app",  # Production frontend
             # Add your production frontend URL here
         ],
@@ -86,6 +89,7 @@ def create_app() -> FastAPI:
     # Mount all v1 API routers with prefix
     app.include_router(email_v1_router.router, prefix="/api/v1")
     app.include_router(auth_router.router, prefix="/api/v1")
+    app.include_router(user_auth.router, prefix="/api/v1")
     app.include_router(jobs_v1_router.router, prefix="/api/v1")
     app.include_router(activity_v1_router.router, prefix="/api/v1")
     app.include_router(settings_v1_router.router, prefix="/api/v1")
