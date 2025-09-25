@@ -34,4 +34,13 @@ services:
       target: test-runtime
     env_file: .env.production
     # Remove dependency on local postgres
-    depends_on: [] 
+    depends_on: []
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    ports:
+      - "80:80"
+    depends_on:
+      - api 

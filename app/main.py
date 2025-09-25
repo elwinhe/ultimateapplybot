@@ -16,10 +16,15 @@ from typing import AsyncGenerator
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import email as email_v1_router
 from app.api.v1 import health as health_v1_router
 from app.api.v1 import auth_router
+from app.api.v1 import jobs as jobs_v1_router
+from app.api.v1 import activity as activity_v1_router
+from app.api.v1 import settings as settings_v1_router
+from app.api.v1 import integrations as integrations_v1_router
 from app.config import settings
 from app.services.postgres_client import postgres_client
 from app.celery_app import celery
@@ -60,15 +65,31 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan  # Register the lifespan manager
     )
+    
+    # Configure CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",  # Local development
+            "http://localhost:5173",  # Vite default port
+            "https://career-pilot-dash.vercel.app",  # Production frontend
+            # Add your production frontend URL here
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Mount the health check router at the root for easy access.
     app.include_router(health_v1_router.router)
 
-    # Mount the main v1 API router with a prefix.
+    # Mount all v1 API routers with prefix
     app.include_router(email_v1_router.router, prefix="/api/v1")
-    
-    # Mount the auth router with the v1 prefix.
     app.include_router(auth_router.router, prefix="/api/v1")
+    app.include_router(jobs_v1_router.router, prefix="/api/v1")
+    app.include_router(activity_v1_router.router, prefix="/api/v1")
+    app.include_router(settings_v1_router.router, prefix="/api/v1")
+    app.include_router(integrations_v1_router.router, prefix="/api/v1")
 
     logger.info("Application created and routers included.")
     return app
