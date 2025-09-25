@@ -166,9 +166,22 @@ async def connect_outlook(
     Returns the OAuth URL for the frontend to redirect to.
     """
     try:
-        # Reuse existing auth flow from auth_router
+        # Generate a unique session key for this OAuth attempt
+        import secrets
+        import redis
+        from app.config import settings as app_settings
+        
+        oauth_session_key = secrets.token_urlsafe(32)
+        
+        # Store the user_id in Redis with the session key (no expiration)
+        redis_client = redis.Redis.from_url(app_settings.REDIS_URL, decode_responses=True)
+        redis_client.set(f"oauth_session:{oauth_session_key}", current_user_id)
+        
+        # Use the session key instead of user_id in the OAuth state
         auth_client = DelegatedGraphAuthenticator(http_client=request.app.state.http_client)
-        auth_url = auth_client.get_auth_flow_url(user_id=current_user_id)
+        auth_url = auth_client.get_auth_flow_url(user_id=oauth_session_key)
+        
+        logger.info("Created OAuth session %s for user %s", oauth_session_key, current_user_id)
         
         return {"redirectUrl": auth_url}
         

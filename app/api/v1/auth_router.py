@@ -61,9 +61,11 @@ async def login(
     summary="Handle Microsoft authentication callback",
 )
 async def auth_callback(
-    code: Annotated[str, Form()],
-    id_token: Annotated[str, Form()],
     auth_client: Annotated[DelegatedGraphAuthenticator, Depends(get_auth_client)],
+    code: Annotated[Optional[str], Form()] = None,
+    id_token: Annotated[Optional[str], Form()] = None,
+    error: Annotated[Optional[str], Form()] = None,
+    error_description: Annotated[Optional[str], Form()] = None,
     state: Annotated[Optional[str], Form()] = None,
 ) -> RedirectResponse:
     """
@@ -71,15 +73,66 @@ async def auth_callback(
     Exchanges the authorization code for tokens and stores them for the user.
     Redirects back to the frontend homepage.
     """
+    frontend_base_url = "http://localhost:8080"  # Based on terminal output showing port 8080
+    
+    # Check if user cancelled or there was an error
+    if error:
+        logger.info(f"Microsoft OAuth cancelled or error: {error} - {error_description}")
+        
+        if error == "access_denied":
+            # User explicitly cancelled
+            logger.info("User cancelled Microsoft OAuth, redirecting to homepage")
+            return RedirectResponse(url=f"{frontend_base_url}?auth_cancelled=true", status_code=302)
+        else:
+            # Other OAuth error
+            logger.warning(f"Microsoft OAuth error: {error} - {error_description}")
+            return RedirectResponse(url=f"{frontend_base_url}?auth_error=oauth_error", status_code=302)
+    
+    # Check if we have the required parameters for successful auth
+    if not code or not id_token:
+        logger.warning("Missing required parameters in OAuth callback")
+        return RedirectResponse(url=f"{frontend_base_url}?auth_error=missing_parameters", status_code=302)
+    
     try:
         await auth_client.acquire_and_store_tokens(code, id_token, state)
         logger.info("Microsoft Outlook authentication successful, redirecting to homepage")
-        # Redirect to frontend homepage (port 8080 based on current setup)
-        frontend_url = "http://localhost:8080"
-            
-        return RedirectResponse(url=frontend_url, status_code=302)
+        return RedirectResponse(url=f"{frontend_base_url}?auth_success=outlook_connected", status_code=302)
     except GraphAuthError as e:
         logger.error("Failed to acquire tokens during callback", exc_info=True)
-        # On error, redirect to frontend with error parameter
-        frontend_url = "http://localhost:8080?auth_error=outlook_connection_failed"
-        return RedirectResponse(url=frontend_url, status_code=302)
+        return RedirectResponse(url=f"{frontend_base_url}?auth_error=outlook_connection_failed", status_code=302)
+
+
+@router.get("/callback", summary="Handle Microsoft authentication callback (GET)")
+async def auth_callback_get(
+    request: Request,
+    error: Optional[str] = None,
+    error_description: Optional[str] = None,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+) -> RedirectResponse:
+    """
+    Handle GET-based OAuth callback (typically for cancellations or errors).
+    """
+    frontend_base_url = "http://localhost:8080"
+    
+    # Check if user cancelled or there was an error
+    if error:
+        logger.info(f"Microsoft OAuth GET callback - error: {error} - {error_description}")
+        
+        if error == "access_denied":
+            # User explicitly cancelled
+            logger.info("User cancelled Microsoft OAuth (GET), redirecting to homepage")
+            return RedirectResponse(url=f"{frontend_base_url}?auth_cancelled=true", status_code=302)
+        else:
+            # Other OAuth error
+            logger.warning(f"Microsoft OAuth GET error: {error} - {error_description}")
+            return RedirectResponse(url=f"{frontend_base_url}?auth_error=oauth_error", status_code=302)
+    
+    # If no error but also no code, treat as cancellation
+    if not code:
+        logger.info("OAuth GET callback without code, treating as cancellation")
+        return RedirectResponse(url=f"{frontend_base_url}?auth_cancelled=true", status_code=302)
+    
+    # If we get here with a code via GET, redirect to main page (unusual case)
+    logger.info("OAuth GET callback with code - redirecting to homepage")
+    return RedirectResponse(url=frontend_base_url, status_code=302)
