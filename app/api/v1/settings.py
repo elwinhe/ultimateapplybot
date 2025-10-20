@@ -34,6 +34,7 @@ class EmailFilterSettings(BaseModel):
     keywords: List[str] = Field(default_factory=list, description="Keywords to filter emails")
     sender_whitelist: List[str] = Field(default_factory=list, description="Whitelisted email addresses")
     check_interval_minutes: int = Field(default=30, ge=5, le=1440, description="Email check interval")
+    filter_start_date: Optional[datetime] = Field(default=None, description="Start date for email filtering (high watermark override)")
     
 class EmailFilterResponse(BaseModel):
     settings: EmailFilterSettings
@@ -43,6 +44,9 @@ class EmailFilterResponse(BaseModel):
 class CacheClearResponse(BaseModel):
     message: str
     cleared_items: int
+
+class FilterStartDateRequest(BaseModel):
+    start_date: datetime = Field(description="Start date for email filtering")
 
 # API Endpoints
 @router.get("/email-filter", response_model=EmailFilterResponse)
@@ -56,7 +60,7 @@ async def get_email_filter_settings(
         # Get settings from database
         settings = await postgres_client.fetch_one(
             """
-            SELECT enabled, keywords, sender_whitelist, check_interval_minutes, last_checked
+            SELECT enabled, keywords, sender_whitelist, check_interval_minutes, last_checked, filter_start_date
             FROM email_filter_settings
             WHERE user_id = $1
             """,
@@ -105,17 +109,18 @@ async def update_email_filter_settings(
         # Upsert settings
         await postgres_client.execute(
             """
-            INSERT INTO email_filter_settings (user_id, enabled, keywords, sender_whitelist, check_interval_minutes, updated_at)
-            VALUES ($1, $2, $3, $4, $5, NOW())
+            INSERT INTO email_filter_settings (user_id, enabled, keywords, sender_whitelist, check_interval_minutes, filter_start_date, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
             ON CONFLICT (user_id) DO UPDATE SET
                 enabled = EXCLUDED.enabled,
                 keywords = EXCLUDED.keywords,
                 sender_whitelist = EXCLUDED.sender_whitelist,
                 check_interval_minutes = EXCLUDED.check_interval_minutes,
+                filter_start_date = EXCLUDED.filter_start_date,
                 updated_at = NOW()
             """,
             current_user_id, settings.enabled, settings.keywords, 
-            settings.sender_whitelist, settings.check_interval_minutes
+            settings.sender_whitelist, settings.check_interval_minutes, settings.filter_start_date
         )
         
         # If settings are being disabled, cancel any active task
@@ -201,6 +206,88 @@ async def stop_email_filtering(
     except Exception as e:
         logger.error(f"Failed to stop email filtering: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to stop email filtering")
+
+@router.post("/email-filter/start-date")
+async def update_filter_start_date(
+    request: FilterStartDateRequest,
+    current_user_id: str = Depends(get_current_user_id),
+) -> Dict[str, str]:
+    """
+    Update the email filtering start date (high watermark override).
+    """
+    try:
+        # Get current Redis watermark timestamp
+        watermark_key = f"email_processor:last_seen_timestamp:{current_user_id}"
+        current_watermark_str = redis_client.get(watermark_key)
+        current_watermark = None
+        
+        if current_watermark_str:
+            try:
+                current_watermark = datetime.fromisoformat(current_watermark_str.replace('Z', '+00:00'))
+            except ValueError:
+                logger.warning(f"Invalid watermark timestamp format: {current_watermark_str}")
+        
+        # Update the filter start date in database
+        await postgres_client.execute(
+            """
+            INSERT INTO email_filter_settings (user_id, filter_start_date, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (user_id) DO UPDATE SET
+                filter_start_date = EXCLUDED.filter_start_date,
+                updated_at = NOW()
+            """,
+            current_user_id, request.start_date
+        )
+        
+        # Only reset watermark if the new start date is LATER than the current watermark
+        should_reset_watermark = False
+        if current_watermark is None:
+            # No watermark exists, safe to set new start date
+            should_reset_watermark = True
+            logger.info("No existing watermark, will start from specified date: %s", request.start_date.isoformat())
+        elif request.start_date > current_watermark:
+            # New start date is later than watermark, update watermark
+            should_reset_watermark = True
+            logger.info("New start date %s is later than watermark %s, updating watermark", 
+                       request.start_date.isoformat(), current_watermark.isoformat())
+        else:
+            # New start date is earlier than watermark, keep existing watermark
+            logger.info("New start date %s is earlier than watermark %s, keeping existing watermark", 
+                       request.start_date.isoformat(), current_watermark.isoformat())
+        
+        if should_reset_watermark:
+            # Set the watermark to the new start date
+            redis_client.set(watermark_key, request.start_date.isoformat())
+        
+        # If filtering is active, restart it to pick up the new start date
+        task_key = f"email_filter_task:{current_user_id}"
+        existing_task_id = redis_client.get(task_key)
+        
+        if existing_task_id:
+            # Cancel existing task
+            celery.control.revoke(existing_task_id, terminate=True)
+            redis_client.delete(task_key)
+            
+            # Start new task with updated settings
+            task = celery.send_task(
+                'app.tasks.email_tasks.process_single_mailbox',
+                args=[current_user_id]
+            )
+            redis_client.setex(task_key, 86400, task.id)
+            
+            if should_reset_watermark:
+                return {"message": f"Filter start date updated and watermark reset to {request.start_date.isoformat()}. Email filtering restarted.", "task_id": task.id}
+            else:
+                return {"message": f"Filter start date saved to {request.start_date.isoformat()}. Existing watermark preserved. Email filtering restarted.", "task_id": task.id}
+        
+        if should_reset_watermark:
+            return {"message": f"Filter start date updated and watermark reset to {request.start_date.isoformat()}"}
+        else:
+            return {"message": f"Filter start date saved to {request.start_date.isoformat()}. Existing watermark preserved (earlier emails already processed)."}
+        
+    except Exception as e:
+        logger.error(f"Failed to update filter start date: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update filter start date")
 
 @router.post("/clear-cache", response_model=CacheClearResponse)
 async def clear_cache(

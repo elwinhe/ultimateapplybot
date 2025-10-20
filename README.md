@@ -1,4 +1,4 @@
-# Elwin's Trial Project: Outlook Email Scanner + Forwarder
+# Outlook Email Scanner + Forwarder by Elwin He
 
 This project is a robust, production-ready application designed to read and filter emails from Microsoft Outlook accounts, process them based on specific criteria, and archive them as `.eml` files in an S3 bucket, along with a reference to the S3 in the metadata saved in postgres. It is built with a scalable, multi-user architecture using FastAPI for the API layer and Celery for background task processing. It follows a clean architecture approach to allow for easier testing, scaling, and maintainability 
 
