@@ -13,6 +13,8 @@ services:
       interval: 15s
       timeout: 3s
       retries: 5
+    networks:
+      - emailreader_network
 
   postgres:
     image: postgres:15-alpine
@@ -36,6 +38,26 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - emailreader_network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: emailreader_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@emailreader.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - emailreader_network
 
   moto:
     image: motoserver/moto:latest
@@ -68,6 +90,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql://emailreader:password@postgres:5432/emailreader_db
+      - REDIS_URL=redis://redis:6379/0
     ports: ["8000:8000"]
     volumes:
       - ./app:/app/app
@@ -81,6 +106,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    networks:
+      - emailreader_network
 
   worker:
     build:
@@ -154,3 +181,8 @@ services:
 volumes:
   redis_data:
   postgres_data:
+  pgadmin_data:
+
+networks:
+  emailreader_network:
+    driver: bridge

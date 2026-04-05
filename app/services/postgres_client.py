@@ -134,21 +134,29 @@ class PostgresClient:
 postgres_client = PostgresClient(db_url=settings.DATABASE_URL)
 
 # Token Storage Functions
-async def store_refresh_token(user_id: str, refresh_token: str) -> None:
+async def store_refresh_token(user_id: str, refresh_token: str, user_email: str = None, access_token: str = None) -> None:
     """Stores or updates a user's refresh token in the database."""
+    # Set expiration to 90 days from now (typical for refresh tokens)
+    expires_at = "NOW() + interval '90 days'"
+    
     await postgres_client.execute(
         """
-        INSERT INTO auth_tokens (user_id, encrypted_refresh_token, updated_at, last_seen_timestamp)
-        VALUES ($1, $2, NOW(), NOW() - interval '7 day')
-        ON CONFLICT (user_id) DO UPDATE SET encrypted_refresh_token = EXCLUDED.encrypted_refresh_token, updated_at = NOW();
+        INSERT INTO auth_tokens (user_id, access_token, refresh_token, expires_at, scope, last_seen_timestamp, updated_at, provider, user_email)
+        VALUES ($1, $2, $3, """ + expires_at + """, 'Mail.Read offline_access', NOW(), NOW(), 'microsoft', $4)
+        ON CONFLICT (user_id, user_email, provider) DO UPDATE SET 
+            access_token = EXCLUDED.access_token,
+            refresh_token = EXCLUDED.refresh_token, 
+            expires_at = EXCLUDED.expires_at,
+            updated_at = NOW(),
+            last_seen_timestamp = NOW();
         """,
-        user_id, refresh_token
+        user_id, access_token or "", refresh_token, user_email
     )
 
 async def get_refresh_token(user_id: str) -> Optional[str]:
     """Retrieves a user's refresh token from the database."""
     row = await postgres_client.fetch_one(
-        "SELECT encrypted_refresh_token FROM auth_tokens WHERE user_id = $1",
+        "SELECT refresh_token FROM auth_tokens WHERE user_id = $1",
         user_id
     )
-    return row["encrypted_refresh_token"] if row else None
+    return row["refresh_token"] if row else None

@@ -25,10 +25,16 @@ class DelegatedGraphAuthenticator:
     def __init__(self, http_client: Optional[httpx.AsyncClient] = None):
         self._http_client = http_client or httpx.AsyncClient()
 
-    def get_auth_flow_url(self) -> str:
+    def get_auth_flow_url(self, user_id: Optional[str] = None) -> str:
         """Builds the URL for any user to sign in."""
         # Generate a secure random nonce for CSRF protection
         nonce = secrets.token_urlsafe(32)
+        
+        # Include user_id in state parameter for callback association
+        state = f"{nonce}"
+        if user_id:
+            state = f"{nonce}:{user_id}"
+            logger.info("Generated OAuth URL with user_id %s in state parameter", user_id)
         
         params = {
             "client_id": settings.CLIENT_ID,
@@ -36,12 +42,13 @@ class DelegatedGraphAuthenticator:
             "redirect_uri": settings.REDIRECT_URI,
             "scope": "openid profile email Mail.Read offline_access",
             "response_mode": "form_post",
+            "state": state,
             "nonce": nonce
         }
         request = httpx.Request("GET", self._auth_url, params=params)
         return str(request.url)
 
-    async def acquire_and_store_tokens(self, code: str, id_token: str) -> None:
+    async def acquire_and_store_tokens(self, code: str, id_token: str, state: Optional[str] = None, app_user_id: Optional[str] = None) -> None:
         """Acquires tokens and stores the refresh token against the user's ID."""
         # Input validation
         if not code or len(code) < 10:
@@ -49,13 +56,45 @@ class DelegatedGraphAuthenticator:
         if not id_token or len(id_token) < 10:
             raise GraphAuthTokenError("Invalid id_token format")
             
+        # Extract session key from state parameter and resolve to actual user_id
+        extracted_session_key = None
+        resolved_user_id = None
+        
+        if state and ":" in state:
+            _, extracted_session_key = state.split(":", 1)
+            logger.info("Extracted session key %s from OAuth state parameter", extracted_session_key)
+            
+            # Resolve session key to actual user_id using Redis
+            try:
+                import redis
+                redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+                resolved_user_id = redis_client.get(f"oauth_session:{extracted_session_key}")
+                if resolved_user_id:
+                    logger.info("Resolved session key %s to user_id %s", extracted_session_key, resolved_user_id)
+                    # Clean up the session key
+                    redis_client.delete(f"oauth_session:{extracted_session_key}")
+                else:
+                    logger.warning("Failed to resolve session key %s - may have expired", extracted_session_key)
+            except Exception as e:
+                logger.error("Failed to resolve OAuth session key: %s", e)
+            
+        # Determine which user_id to use - prioritize resolved from session, then passed parameter
+        final_app_user_id = resolved_user_id or app_user_id
+        logger.info("Using final_app_user_id: %s (resolved: %s, passed: %s)", final_app_user_id, resolved_user_id, app_user_id)
+        
+        # Get Microsoft user info for email address
         try:
             claims = jwt.get_unverified_claims(id_token)
-            user_id = claims.get("preferred_username") or claims.get("oid")
-            if not user_id:
-                raise GraphAuthTokenError("User identifier not found in id_token.")
+            microsoft_user_email = claims.get("preferred_username") or claims.get("email")
+            microsoft_user_id = claims.get("oid")
+            if not microsoft_user_email:
+                raise GraphAuthTokenError("User email not found in id_token.")
         except JWTError as e:
             raise GraphAuthTokenError("Invalid id_token.") from e
+
+        # We must have an application user_id to proceed
+        if not final_app_user_id:
+            raise GraphAuthTokenError("No application user ID available. User must be logged in to connect accounts.")
 
         token_data = {
             "grant_type": "authorization_code",
@@ -72,11 +111,13 @@ class DelegatedGraphAuthenticator:
 
         result = response.json()
         refresh_token = result.get("refresh_token")
+        access_token = result.get("access_token")
         if not refresh_token:
             raise GraphAuthTokenError("No refresh token returned.")
 
-        await store_refresh_token(user_id, refresh_token)
-        logger.info("Successfully stored refresh token for user %s", user_id)
+        # Always use the application user_id (never fall back to Microsoft ID)
+        await store_refresh_token(final_app_user_id, refresh_token, microsoft_user_email, access_token)
+        logger.info("Successfully stored refresh token for app_user %s with Microsoft email %s", final_app_user_id, microsoft_user_email)
 
     async def get_access_token_for_user(self, user_id: str) -> str:
         """Gets a new access token for a specific user."""
