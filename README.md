@@ -4,8 +4,6 @@ End-to-end agentic system that ingests job application emails via Microsoft Outl
 
 Built with FastAPI, Celery Beat (fan-out worker pattern), Redis, Docker Compose, and moto for local S3 mocking.
 
-Video demo link: https://drive.google.com/file/d/1MTiT8AQjYtRn__-WnzXF9pSh8hrT5fQp/view?usp=sharing
-
 ## Core Architecture
 
 The application is designed with a clean separation of concerns, dividing logic into distinct layers:
