@@ -43,7 +43,7 @@ This setup runs all services locally using Docker containers, including a mock S
 
 ### 1. Setup Environment File
 
-Create a `.env` file in the project root with the file I sent you through email
+Create a .env file in the project root. Required variables: DATABASE_URL, REDIS_URL, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_BUCKET, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID, OPENAI_API_KEY
 
 ### 2. Run the Development Stack
 
