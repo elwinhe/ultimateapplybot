@@ -65,6 +65,8 @@ services:
     ports:
       - "5002:5000"
     command: -H 0.0.0.0 # Listen on all interfaces
+    networks:
+      - emailreader_network
 
   beat:
     build:
@@ -80,6 +82,8 @@ services:
     depends_on:
       - redis
       - postgres
+    networks:
+      - emailreader_network
 
   api:
     build:
@@ -127,6 +131,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    networks:
+      - emailreader_network
 
   sqs_consumer:
     build:
@@ -140,6 +146,8 @@ services:
       - ./output:/app/output # Mount an output directory
     depends_on:
       - moto
+    networks:
+      - emailreader_network
 
   apply_worker:
     build:
@@ -160,6 +168,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+    networks:
+      - emailreader_network
 
   frontend:
     build:
@@ -177,6 +187,8 @@ services:
       - /app/node_modules
     depends_on:
       - api
+    networks:
+      - emailreader_network
 
 volumes:
   redis_data:

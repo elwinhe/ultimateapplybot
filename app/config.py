@@ -48,5 +48,8 @@ class Settings(BaseSettings):
 
     SKIP_S3: bool = True
 
+    # Frontend URL for OAuth redirects
+    FRONTEND_BASE_URL: str = "http://localhost:5173"
+
 # Create a single, importable instance for the rest of the application to use.
 settings = Settings()

@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app.auth.graph_auth import DelegatedGraphAuthenticator, GraphAuthError
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -73,7 +74,7 @@ async def auth_callback(
     Exchanges the authorization code for tokens and stores them for the user.
     Redirects back to the frontend homepage.
     """
-    frontend_base_url = "http://localhost:8080"  # Based on terminal output showing port 8080
+    frontend_base_url = settings.FRONTEND_BASE_URL
     
     # Check if user cancelled or there was an error
     if error:
@@ -113,7 +114,7 @@ async def auth_callback_get(
     """
     Handle GET-based OAuth callback (typically for cancellations or errors).
     """
-    frontend_base_url = "http://localhost:8080"
+    frontend_base_url = settings.FRONTEND_BASE_URL
     
     # Check if user cancelled or there was an error
     if error:

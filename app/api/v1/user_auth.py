@@ -12,7 +12,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr, Field
 from jose import JWTError, jwt
 import secrets
-import hashlib
+from passlib.context import CryptContext
 
 from app.config import settings
 from app.services.postgres_client import postgres_client
@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 # Security
 security = HTTPBearer()
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # JWT settings
 SECRET_KEY = settings.JWT_SECRET_KEY or secrets.token_urlsafe(32)
@@ -54,14 +57,12 @@ class UserResponse(BaseModel):
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
-    # Simple SHA256 hash for now - in production use bcrypt
-    return hashlib.sha256(plain_password.encode()).hexdigest() == hashed_password
+    return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password."""
-    # Simple SHA256 hash for now - in production use bcrypt
-    return hashlib.sha256(password.encode()).hexdigest()
+    return pwd_context.hash(password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):

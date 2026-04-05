@@ -87,14 +87,41 @@ class DelegatedGraphAuthenticator:
             claims = jwt.get_unverified_claims(id_token)
             microsoft_user_email = claims.get("preferred_username") or claims.get("email")
             microsoft_user_id = claims.get("oid")
+            microsoft_user_name = claims.get("name", microsoft_user_email.split("@")[0])
             if not microsoft_user_email:
                 raise GraphAuthTokenError("User email not found in id_token.")
         except JWTError as e:
             raise GraphAuthTokenError("Invalid id_token.") from e
 
-        # We must have an application user_id to proceed
+        # If no user_id, auto-create a user account from OAuth
         if not final_app_user_id:
-            raise GraphAuthTokenError("No application user ID available. User must be logged in to connect accounts.")
+            from app.services.postgres_client import postgres_client
+            from datetime import datetime
+            
+            # Check if user already exists by email
+            existing_user = await postgres_client.fetch_one(
+                "SELECT user_id FROM users WHERE email = $1",
+                microsoft_user_email
+            )
+            
+            if existing_user:
+                final_app_user_id = str(existing_user["user_id"])
+                logger.info("Found existing user %s for Microsoft email %s", final_app_user_id, microsoft_user_email)
+            else:
+                # Create new user account
+                new_user = await postgres_client.fetch_one(
+                    """
+                    INSERT INTO users (email, name, password_hash, created_at)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING user_id
+                    """,
+                    microsoft_user_email,
+                    microsoft_user_name,
+                    "",  # No password for OAuth-only users
+                    datetime.utcnow()
+                )
+                final_app_user_id = str(new_user["user_id"])
+                logger.info("Created new user %s for Microsoft email %s", final_app_user_id, microsoft_user_email)
 
         token_data = {
             "grant_type": "authorization_code",
@@ -125,9 +152,13 @@ class DelegatedGraphAuthenticator:
         if not user_id or not isinstance(user_id, str):
             raise GraphAuthError("Invalid user_id provided")
             
-        refresh_token = await get_refresh_token(user_id)
-        if not refresh_token:
+        token_row = await get_refresh_token(user_id)
+        if not token_row:
             raise GraphAuthError(f"No refresh token found for user {user_id}.")
+
+        refresh_token = token_row["refresh_token"]
+        user_email = token_row.get("user_email")
+        access_token = token_row.get("access_token")
 
         token_data = {
             "grant_type": "refresh_token",
@@ -142,6 +173,7 @@ class DelegatedGraphAuthenticator:
 
         result = response.json()
         if new_refresh_token := result.get("refresh_token"):
-            await store_refresh_token(user_id, new_refresh_token)
+            new_access_token = result.get("access_token")
+            await store_refresh_token(user_id, new_refresh_token, user_email, new_access_token)
 
         return result["access_token"]

@@ -156,7 +156,7 @@ async def store_refresh_token(user_id: str, refresh_token: str, user_email: str 
 async def get_refresh_token(user_id: str) -> Optional[str]:
     """Retrieves a user's refresh token from the database."""
     row = await postgres_client.fetch_one(
-        "SELECT refresh_token FROM auth_tokens WHERE user_id = $1",
+        "SELECT refresh_token, user_email, access_token FROM auth_tokens WHERE user_id = $1",
         user_id
     )
-    return row["refresh_token"] if row else None
+    return row if row else None
