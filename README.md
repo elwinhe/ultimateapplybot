@@ -1,5 +1,4 @@
-# AI Job Application Pipeline
-
+# Automated apply bot
 End-to-end agentic system that ingests job application emails via Microsoft Outlook (OAuth2 + Microsoft Graph API), queues them through AWS SQS, and triggers a Playwright browser automation agent powered by GPT-4o to auto-fill and submit job applications. Tracks all submissions in PostgreSQL + Google Sheets.
 
 Built with FastAPI, Celery Beat (fan-out worker pattern), Redis, Docker Compose, and moto for local S3 mocking.
